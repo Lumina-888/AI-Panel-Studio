@@ -1,0 +1,83 @@
+import { useState } from 'react'
+import { useDiscussionStore } from '../../stores/discussionStore'
+
+type Tab = 'consensus' | 'divergence'
+
+export function ConsensusDivergencePanel() {
+  const { consensusPoints, divergencePoints } = useDiscussionStore()
+  const [tab, setTab] = useState<Tab>('consensus')
+
+  return (
+    <div className="border-t border-border-glow glass-panel shrink-0">
+      {/* Tab 切换 */}
+      <div className="flex border-b border-border-glow">
+        <button
+          onClick={() => setTab('consensus')}
+          className={`flex-1 py-2 text-xs font-semibold transition-colors cursor-pointer
+            ${tab === 'consensus'
+              ? 'text-accent-cyan border-b-2 border-accent-cyan'
+              : 'text-text-dim hover:text-text-primary'
+            }`}
+        >
+          ✓ 共识 ({consensusPoints.length})
+        </button>
+        <button
+          onClick={() => setTab('divergence')}
+          className={`flex-1 py-2 text-xs font-semibold transition-colors cursor-pointer
+            ${tab === 'divergence'
+              ? 'text-accent-magenta border-b-2 border-accent-magenta'
+              : 'text-text-dim hover:text-text-primary'
+            }`}
+        >
+          ⚡ 分歧 ({divergencePoints.length})
+        </button>
+      </div>
+
+      {/* 内容区 */}
+      <div className="max-h-[180px] overflow-y-auto p-3 space-y-2">
+        {tab === 'consensus' && consensusPoints.length === 0 && (
+          <p className="text-xs text-text-dim text-center py-2">等待共识产生...</p>
+        )}
+        {tab === 'divergence' && divergencePoints.length === 0 && (
+          <p className="text-xs text-text-dim text-center py-2">等待分歧浮现...</p>
+        )}
+
+        {tab === 'consensus' && consensusPoints.map((c) => (
+          <div key={c.id} className="flex items-start gap-2 p-2 rounded-lg bg-accent-cyan/5
+                                      border border-accent-cyan/15 animate-fade-in-up">
+            <span className="text-accent-cyan text-xs mt-0.5">✓</span>
+            <div className="min-w-0">
+              <p className="text-xs text-text-primary">{c.content}</p>
+              <div className="flex items-center gap-2 mt-1">
+                <div className="h-1 flex-1 rounded bg-white/10">
+                  <div
+                    className="h-1 rounded bg-accent-cyan transition-all"
+                    style={{ width: `${(c.confidence * 100).toFixed(0)}%` }}
+                  />
+                </div>
+                <span className="text-xs text-text-dim font-mono">
+                  {(c.confidence * 100).toFixed(0)}%
+                </span>
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {tab === 'divergence' && divergencePoints.map((d) => (
+          <div key={d.id} className="p-2 rounded-lg bg-accent-magenta/5 border border-accent-magenta/15
+                                    animate-fade-in-up">
+            <p className="text-xs text-text-primary mb-1.5">{d.content}</p>
+            <div className="space-y-1">
+              {d.perspectives.map((p, i) => (
+                <div key={i} className="flex items-start gap-1.5">
+                  <span className="text-accent-magenta text-xs mt-0.5 shrink-0">◆</span>
+                  <span className="text-xs text-text-dim">{p}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}

@@ -1,0 +1,103 @@
+@import 'tailwindcss';
+
+/* ===== 科技感演播厅主题 ===== */
+
+@theme {
+  --color-bg-deep: #0a0a14;
+  --color-bg-panel: rgba(10, 10, 30, 0.6);
+  --color-border-glow: rgba(0, 229, 255, 0.25);
+  --color-accent-cyan: #00e5ff;
+  --color-accent-magenta: #ff4081;
+  --color-text-primary: #e0e0f0;
+  --color-text-dim: #6a6a8a;
+  --color-status-green: #00e676;
+  --color-status-amber: #ffab00;
+  --color-status-gray: #555555;
+
+  --font-sans: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* ===== 全局基础 ===== */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background-color: var(--color-bg-deep);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+}
+
+/* ===== 自定义滚动条 ===== */
+
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-text-dim);
+  border-radius: 2px;
+}
+
+/* ===== 科技感动画 ===== */
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 4px currentColor; }
+  50%      { box-shadow: 0 0 16px currentColor, 0 0 24px currentColor; }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes slideInLeft {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0); }
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+
+/* ===== 工具类 ===== */
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.4s ease-out;
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 2s ease-in-out infinite;
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, transparent, rgba(0, 229, 255, 0.05), transparent);
+  background-size: 200% 100%;
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+.glass-panel {
+  background: var(--color-bg-panel);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--color-border-glow);
+}
+
+.dot-grid {
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
