@@ -9,7 +9,6 @@ const VALID_MESSAGE_TYPES: MessageType[] = [
 const SchedulingResponseSchema = z.object({
   panelist_id: z.string().min(1),
   type: z.string(),
-  content: z.string().min(1),
 })
 
 function buildSystemPrompt(): string {
@@ -24,8 +23,8 @@ function buildSystemPrompt(): string {
 6. 每位发言控制在 1-2 句话（约 50-150 字）
 7. 如果讨论已经充分（通常 10-15 轮发言后），主持人可以做总结(closing)并结束讨论
 
-严格以 JSON 格式返回：
-{"panelist_id": "嘉宾ID", "type": "opening|statement|rebuttal|supplement|closing", "content": "发言内容"}`
+严格以 JSON 格式返回（只做调度，不写发言内容）：
+{"panelist_id": "嘉宾ID", "type": "opening|statement|rebuttal|supplement|closing"}`
 }
 
 function buildUserPrompt(ctx: SchedulingContext): string {
@@ -67,7 +66,7 @@ function extractJson(response: string): string {
 function parseResponse(
   response: string,
   ctx: SchedulingContext
-): { panelist_id: string; type: MessageType; content: string } {
+): { panelist_id: string; type: MessageType } {
   let data: unknown
   try {
     data = JSON.parse(extractJson(response))
@@ -81,7 +80,7 @@ function parseResponse(
     throw new LLMParseError(`发言调度返回格式不符合预期: ${issues}`)
   }
 
-  const { panelist_id, type, content } = result.data
+  const { panelist_id, type } = result.data
 
   const validIds = ctx.panelists.map(p => p.id)
   if (!validIds.includes(panelist_id)) {
@@ -91,7 +90,6 @@ function parseResponse(
   return {
     panelist_id,
     type: normalizeMessageType(type),
-    content,
   }
 }
 
@@ -108,7 +106,7 @@ function checkConsecutiveRule(ctx: SchedulingContext, proposedPanelistId: string
 export async function decideNextSpeaker(
   ctx: SchedulingContext,
   llm: LLMClient
-): Promise<{ panelist_id: string; type: MessageType; content: string }> {
+): Promise<{ panelist_id: string; type: MessageType }> {
   if (ctx.panelists.length === 0) {
     throw new ValidationError('嘉宾列表不能为空')
   }
@@ -126,4 +124,80 @@ export async function decideNextSpeaker(
 
   console.log('[discussion] 发言调度完成, next:', result.panelist_id, 'type:', result.type)
   return result
+}
+
+// ===== 流式发言内容生成 =====
+
+function buildSpeechSystemPrompt(): string {
+  return `你正在参加一场圆桌讨论。根据你的角色和立场，针对当前话题发表观点。
+
+要求：
+1. 严格以第一人称发言，直接输出对话内容，不加引号、不署名、不加角色标注
+2. 控制在 1-2 句话（约 50-150 字）
+3. 语言自然、口语化，像是在真实对话
+4. 根据你的立场和角色表达观点，可适当回应或反驳前面的发言
+5. 只输出发言原文，不输出任何其他内容`
+}
+
+function buildSpeechUserPrompt(
+  ctx: SchedulingContext,
+  decision: { panelist_id: string; type: MessageType }
+): string {
+  const panelist = ctx.panelists.find(p => p.id === decision.panelist_id)
+  if (!panelist) throw new ValidationError('未找到发言嘉宾')
+
+  const history =
+    ctx.messages.length > 0
+      ? ctx.messages.slice(-8).map(m => `[${m.name}](${m.type}): ${m.content}`).join('\n')
+      : '(讨论尚未开始，你是第一个发言)'
+
+  const typeHint: Record<string, string> = {
+    opening: '你是主持人，请做一个精彩的开场白，引出话题',
+    closing: '你是主持人，请对讨论进行总结收尾',
+    statement: '请陈述你的核心观点',
+    rebuttal: '请针对最近的不同观点进行反驳',
+    supplement: '请在已有讨论基础上补充你的见解',
+  }
+
+  return `讨论话题：${ctx.topic}
+
+你的身份：
+- 名字：${panelist.name}
+- 角色：${panelist.role === 'host' ? '主持人' : '专家'}
+- 头衔：${panelist.title}
+- 立场：${panelist.stance}
+
+发言类型：${decision.type} — ${typeHint[decision.type] || '请发表观点'}
+
+最近讨论记录：
+${history}
+
+现在请你以 ${panelist.name} 的身份发言。只输出发言原文。`
+}
+
+export async function* generateSpeechStream(
+  ctx: SchedulingContext,
+  decision: { panelist_id: string; type: MessageType },
+  llm: LLMClient
+): AsyncGenerator<string> {
+  const messages = [
+    { role: 'system', content: buildSpeechSystemPrompt() },
+    { role: 'user', content: buildSpeechUserPrompt(ctx, decision) },
+  ]
+
+  for await (const token of llm.streamChat(messages)) {
+    yield token
+  }
+}
+
+export async function generateSpeechContent(
+  ctx: SchedulingContext,
+  decision: { panelist_id: string; type: MessageType },
+  llm: LLMClient
+): Promise<string> {
+  let content = ''
+  for await (const token of generateSpeechStream(ctx, decision, llm)) {
+    content += token
+  }
+  return content
 }
