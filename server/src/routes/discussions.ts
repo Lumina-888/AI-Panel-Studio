@@ -34,7 +34,8 @@ router.get('/', async (_req: Request, res: Response) => {
 
     const enriched = discussions.map(d => {
       const panelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [d.id]) as PanelistRow[]
-      return { ...d, panelists }
+      const msgCount = queryOne(db, 'SELECT COUNT(*) as cnt FROM messages WHERE discussion_id = ?', [d.id]) as any
+      return { ...d, panelists, message_count: msgCount?.cnt ?? 0 }
     })
 
     res.json(enriched)

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { Discussion, Panelist, Message, ConsensusPoint, DivergencePoint } from '../types'
 import type { PanelistStatusEvent } from '../types'
+import { useAppStore } from './appStore'
 
 interface DiscussionState {
   // 基础信息
@@ -188,7 +189,9 @@ export const useDiscussionStore = create<DiscussionState>((set, get) => ({
       return { divergencePoints: [...s.divergencePoints, point] }
     }),
 
-  endDiscussion: (summary: string) =>
+  endDiscussion: (summary: string) => {
+    // 同步刷新列表状态
+    useAppStore.getState().fetchDiscussions()
     set((s) => ({
       discussion: s.discussion
         ? { ...s.discussion, status: 'ended' as const }
@@ -208,7 +211,8 @@ export const useDiscussionStore = create<DiscussionState>((set, get) => ({
           created_at: new Date().toISOString(),
         } satisfies Message,
       ],
-    })),
+    }))
+  },
 
   reset: () => {
     get().disconnectSSE()

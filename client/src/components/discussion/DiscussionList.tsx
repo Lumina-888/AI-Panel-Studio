@@ -31,7 +31,7 @@ export function DiscussionList({ onNewDiscussion }: Props) {
 
   const statusLabel = (s: string) => {
     switch (s) {
-      case 'live': return '● 进行中'
+      case 'live': return '● 直播中'
       case 'pending': return '○ 待开始'
       case 'ended': return '◎ 已结束'
     }
