@@ -56,7 +56,7 @@ export function CreateDiscussionModal({ onClose }: Props) {
       if (!res.ok) throw new Error('确认失败')
       await fetchDiscussions()
       onClose()
-      navigate(`/discussion/${discussionId}`)
+      navigate(`/discussions/${discussionId}`)
     } catch (e: any) {
       setError(e.message || '确认失败')
     }

@@ -41,7 +41,7 @@ export function HomeDiscussionPreview() {
           return (
             <button
               key={d.id}
-              onClick={() => navigate(`/discussion/${d.id}`)}
+              onClick={() => navigate(`/discussions/${d.id}`)}
               className="w-full text-left px-5 py-4 border-b border-white/[0.04] last:border-b-0
                          hover:bg-white/[0.02] transition-colors cursor-pointer"
             >

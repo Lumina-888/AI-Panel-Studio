@@ -21,7 +21,7 @@ export function DiscussionList({ onNewDiscussion }: Props) {
 
   const handleSelect = (d: DiscussionSummary) => {
     setActiveDiscussion(d.id)
-    navigate(`/discussion/${d.id}`)
+    navigate(`/discussions/${d.id}`)
   }
 
   const handleDelete = async () => {
