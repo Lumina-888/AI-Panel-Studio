@@ -109,7 +109,11 @@ router.get('/:id', async (req: Request, res: Response) => {
     const panelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
     const messages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [req.params.id]) as MessageRow[]
     const consensus = queryAll(db, 'SELECT * FROM consensus_points WHERE discussion_id = ?', [req.params.id]) as ConsensusRow[]
-    const divergence = queryAll(db, 'SELECT * FROM divergence_points WHERE discussion_id = ?', [req.params.id]) as DivergenceRow[]
+    const divergenceRaw = queryAll(db, 'SELECT * FROM divergence_points WHERE discussion_id = ?', [req.params.id]) as DivergenceRow[]
+    const divergence = divergenceRaw.map(d => ({
+      ...d,
+      perspectives: JSON.parse(d.perspectives || '[]') as string[],
+    }))
 
     const enrichedMessages = enrichMessages(messages, panelists)
     console.log('[GET /:id] enriched msg sample:', enrichedMessages[0]?.name)
