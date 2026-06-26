@@ -11,6 +11,7 @@ export interface Discussion {
   expert_count: number
   status: DiscussionStatus
   created_at: string
+  pinned_at: string | null
 }
 
 export interface DiscussionSummary extends Discussion {
@@ -64,6 +65,7 @@ export interface DivergencePoint {
 export type SSEEventType =
   | 'panelist_status'
   | 'transcript_message'
+  | 'message_token'
   | 'consensus_update'
   | 'divergence_update'
   | 'discussion_end'
@@ -76,4 +78,10 @@ export interface PanelistStatusEvent {
 
 export interface DiscussionEndEvent {
   summary: string
+}
+
+export interface MessageTokenEvent {
+  panelist_id: string
+  token: string
+  seq: number
 }
