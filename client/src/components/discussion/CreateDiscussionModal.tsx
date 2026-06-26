@@ -11,7 +11,7 @@ interface Props {
 type Step = 'input' | 'confirm'
 
 export function CreateDiscussionModal({ onClose }: Props) {
-  const { fetchDiscussions } = useAppStore()
+  const { fetchDiscussions, setActiveDiscussion } = useAppStore()
   const navigate = useNavigate()
 
   const [step, setStep] = useState<Step>('input')
@@ -54,6 +54,7 @@ export function CreateDiscussionModal({ onClose }: Props) {
       if (!res.ok) throw new Error('确认失败')
       await fetchDiscussions()
       onClose()
+      setActiveDiscussion(discussionId)
       navigate(`/discussion/${discussionId}`)
     } catch (e: any) {
       setError(e.message || '确认失败')

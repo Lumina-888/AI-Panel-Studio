@@ -9,7 +9,7 @@ import { useState } from 'react'
 
 export function AppLayout() {
   const { id } = useParams<{ id?: string }>()
-  const { fetchDiscussions, createModalOpen, openCreateModal, closeCreateModal } = useAppStore()
+  const { fetchDiscussions, createModalOpen, openCreateModal, closeCreateModal, setActiveDiscussion } = useAppStore()
   const [leftOpen, setLeftOpen] = useState(false)
   const [rightOpen, setRightOpen] = useState(false)
   const isRoom = !!id
@@ -17,6 +17,11 @@ export function AppLayout() {
   useEffect(() => {
     fetchDiscussions()
   }, [fetchDiscussions])
+
+  // 同步 URL 中的讨论 ID 到高亮状态（覆盖直接 URL 访问/刷新场景）
+  useEffect(() => {
+    if (id) setActiveDiscussion(id)
+  }, [id, setActiveDiscussion])
 
   return (
     <div className="h-full w-full flex bg-bg-deep dot-grid">
