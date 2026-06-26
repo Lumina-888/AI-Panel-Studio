@@ -13,6 +13,7 @@ export interface DiscussionRow {
   expert_count: number
   status: DiscussionStatus
   created_at: string
+  pinned_at: string | null
 }
 
 export interface PanelistRow {
@@ -57,6 +58,7 @@ export interface DivergenceRow {
 
 export interface LLMClient {
   chat(messages: { role: string; content: string }[]): Promise<string>
+  streamChat(messages: { role: string; content: string }[]): AsyncGenerator<string>
 }
 
 // ===== Business Input/Output Types =====
@@ -77,7 +79,7 @@ export interface GeneratedPanelist {
 export interface SchedulingContext {
   topic: string
   messages: { panelist_id: string; name: string; content: string; type: MessageType }[]
-  panelists: { id: string; name: string; role: PanelistRole; status: PanelistStatus }[]
+  panelists: { id: string; name: string; role: PanelistRole; title: string; stance: string; status: PanelistStatus }[]
 }
 
 export interface ConsensusInput {
