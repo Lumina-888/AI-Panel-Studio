@@ -1,7 +1,6 @@
 .starfield-container {
   height: 100%;
   width: 100%;
-  background: radial-gradient(ellipse at bottom, #1b2735 0%, #090a0f 100%);
   overflow: hidden;
   position: absolute;
   top: 0;
@@ -69,4 +68,18 @@
   to {
     transform: translateY(-2000px);
   }
+}
+
+.sf-blue {
+  background: radial-gradient(ellipse at bottom, #1b2735 0%, #090a0f 100%);
+}
+
+.sf-mono {
+  background: radial-gradient(ellipse at bottom, #1a1a1a 0%, #050505 100%);
+}
+
+.sf-mono #stars,
+.sf-mono #stars2,
+.sf-mono #stars3 {
+  /* 白色星星在黑白主题下保持不变 */
 }
