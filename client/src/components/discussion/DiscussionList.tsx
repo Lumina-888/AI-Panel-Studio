@@ -125,26 +125,36 @@ export function DiscussionList({ onNewDiscussion }: Props) {
       {/* 删除确认弹窗 — 统一框架 */}
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-          <div className="glass-panel rounded-2xl w-[420px] max-w-[92vw] p-6 animate-fade-in-up">
-            <div className="flex items-center justify-between mb-4">
+          <div className="glass-panel rounded-2xl w-[480px] max-w-[92vw] animate-fade-in-up">
+
+            {/* 标题栏 */}
+            <div className="flex items-center justify-between px-6 pt-6 pb-4">
               <h3 className="text-lg font-semibold text-text-primary">确认删除</h3>
               <button
                 onClick={() => setDeleteTarget(null)}
-                className="p-1 rounded-md hover:bg-white/10 text-text-dim hover:text-text-primary transition-colors cursor-pointer"
+                className="p-1.5 rounded-lg hover:bg-white/10 text-text-dim hover:text-text-primary transition-colors cursor-pointer"
               >
                 <CloseIcon />
               </button>
             </div>
-            <p className="text-sm text-text-dim mb-2">确定要删除以下讨论吗？此操作不可撤销。</p>
-            <p className="text-sm font-medium text-text-primary mb-6 truncate bg-white/[0.03] rounded-lg p-2.5">
-              {deleteTarget.topic}
-            </p>
-            <div className="flex gap-3">
-              <SlideButton onClick={handleDelete} variant="danger">
-                确认删除
-              </SlideButton>
+
+            {/* 内容卡片 */}
+            <div className="mx-6 mb-6 rounded-xl p-6 bg-white/[0.03] border border-white/[0.06] space-y-4">
+              <p className="text-sm text-text-dim">
+                ⚠ 确定要删除以下讨论吗？此操作不可撤销。
+              </p>
+              <p className="text-sm font-medium text-text-primary truncate bg-white/[0.04] rounded-lg p-3">
+                {deleteTarget.topic}
+              </p>
+            </div>
+
+            {/* 按钮区 */}
+            <div className="border-t border-white/[0.06] px-6 pb-6 pt-4 flex justify-evenly gap-4">
               <SlideButton onClick={() => setDeleteTarget(null)} variant="default">
                 取消
+              </SlideButton>
+              <SlideButton onClick={handleDelete} variant="danger">
+                确认删除
               </SlideButton>
             </div>
           </div>
