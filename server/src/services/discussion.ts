@@ -2,6 +2,9 @@ import { z } from 'zod'
 import type { LLMClient, SchedulingContext, MessageType } from '../types/index.js'
 import { ValidationError, LLMParseError } from '../utils/errors.js'
 
+/** 讨论最大轮次 — 达到此值后强制结束 */
+export const MAX_ROUNDS = 15
+
 const VALID_MESSAGE_TYPES: MessageType[] = [
   'opening', 'statement', 'rebuttal', 'supplement', 'closing',
 ]
@@ -200,4 +203,98 @@ export async function generateSpeechContent(
     content += token
   }
   return content
+}
+
+// ===== 系统总结生成 =====
+
+function buildSystemSummaryPrompt(): string {
+  return `你是一个圆桌讨论的观察员和分析师。你的任务是对一场完整的圆桌讨论进行综合总结。
+
+要求：
+1. 输出中文
+2. 总结结构清晰，包含以下部分（使用 Markdown 格式）：
+   ## 讨论概述
+   用 1-2 句话概括本次讨论的核心议题和整体走向
+
+   ## 主要观点
+   - 列出每位嘉宾的核心立场和关键发言
+   - 标注嘉宾姓名和视角
+
+   ## 达成的共识
+   - 列出各方趋于一致的观点
+
+   ## 存在的分歧
+   - 列出未能调和的对立观点，以及各方立场
+
+   ## 讨论亮点
+   - 指出讨论中最精彩的交锋或最有启发性的见解
+
+3. 客观中立，不偏向任何一方
+4. 控制在 300-500 字`
+}
+
+function buildSystemSummaryUserPrompt(
+  ctx: SchedulingContext,
+  consensusItems: { content: string; confidence: number }[],
+  divergenceItems: { content: string; perspectives: string[] }[]
+): string {
+  const fullTranscript = ctx.messages
+    .map(m => `[${m.name}](${m.type}): ${m.content}`)
+    .join('\n')
+
+  const consensusText = consensusItems.length > 0
+    ? consensusItems.map(c => `- ${c.content} (置信度: ${(c.confidence * 100).toFixed(0)}%)`).join('\n')
+    : '(无)'
+
+  const divergenceText = divergenceItems.length > 0
+    ? divergenceItems.map(d => `- ${d.content}\n  立场: ${d.perspectives.join(' | ')}`).join('\n')
+    : '(无)'
+
+  return `讨论话题：${ctx.topic}
+
+完整讨论记录：
+${fullTranscript}
+
+已提炼的共识点：
+${consensusText}
+
+已提炼的分歧点：
+${divergenceText}
+
+请对本次讨论进行综合总结。`
+}
+
+export interface SystemSummaryResult {
+  content: string
+  newConsensus: { content: string; confidence: number }[]
+  newDivergence: { content: string; perspectives: string[] }[]
+}
+
+export async function generateDiscussionSummary(
+  ctx: SchedulingContext,
+  consensusItems: { content: string; confidence: number }[],
+  divergenceItems: { content: string; perspectives: string[] }[],
+  llm: LLMClient
+): Promise<SystemSummaryResult> {
+  console.log('[discussion] 开始生成系统总结, topic:', ctx.topic, 'msg_count:', ctx.messages.length)
+
+  const messages = [
+    { role: 'system', content: buildSystemSummaryPrompt() },
+    { role: 'user', content: buildSystemSummaryUserPrompt(ctx, consensusItems, divergenceItems) },
+  ]
+
+  const response = await llm.chat(messages)
+
+  console.log('[discussion] 系统总结生成完成')
+  return {
+    content: response,
+    newConsensus: [],
+    newDivergence: [],
+  }
+}
+
+/** 获取讨论中的主持人 ID */
+export function getHostPanelistId(ctx: SchedulingContext): string | null {
+  const host = ctx.panelists.find(p => p.role === 'host')
+  return host?.id ?? null
 }

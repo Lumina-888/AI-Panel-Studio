@@ -4,8 +4,9 @@ import { useAppStore } from '../../stores/appStore'
 import { PinIcon, DeleteIcon, CloseIcon } from '../layout/Icons'
 import { PulseDot } from '../common/PulseDot'
 import { StarButton } from '../common/StarButton'
-import { SlideButton } from '../common/SlideButton'
 import type { DiscussionSummary } from '../../types'
+import { GradientButton } from '../common/GradientButton'
+
 
 interface Props {
   onNewDiscussion: () => void
@@ -42,7 +43,7 @@ export function DiscussionList({ onNewDiscussion }: Props) {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full max-w-[410px]">
       {/* 头部 */}
       <div className="p-4 border-b border-border-glow flex items-center justify-between">
         <h2 className="text-lg font-semibold text-text-primary">讨论列表</h2>
@@ -150,12 +151,12 @@ export function DiscussionList({ onNewDiscussion }: Props) {
 
             {/* 按钮区 */}
             <div className="border-t border-white/[0.06] px-6 pb-6 pt-4 flex justify-evenly gap-4">
-              <SlideButton onClick={() => setDeleteTarget(null)} variant="default">
+              <GradientButton onClick={() => setDeleteTarget(null)}>
                 取消
-              </SlideButton>
-              <SlideButton onClick={handleDelete} variant="danger">
+              </GradientButton>
+              <GradientButton onClick={handleDelete}>
                 确认删除
-              </SlideButton>
+              </GradientButton>
             </div>
           </div>
         </div>

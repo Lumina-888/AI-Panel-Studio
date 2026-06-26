@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Discussion, Panelist, Message, ConsensusPoint, DivergencePoint } from '../types'
+import type { Discussion, Panelist, Message, ConsensusPoint, DivergencePoint, SystemSummaryEvent } from '../types'
 import type { PanelistStatusEvent } from '../types'
 import { useAppStore } from './appStore'
 
@@ -13,6 +13,7 @@ interface DiscussionState {
   messages: Message[]
   consensusPoints: ConsensusPoint[]
   divergencePoints: DivergencePoint[]
+  systemSummary: SystemSummaryEvent | null
 
   // SSE 连接
   eventSource: EventSource | null
@@ -28,6 +29,7 @@ interface DiscussionState {
   updatePanelistStatus: (e: PanelistStatusEvent) => void
   upsertConsensus: (point: ConsensusPoint) => void
   upsertDivergence: (point: DivergencePoint) => void
+  setSystemSummary: (summary: SystemSummaryEvent) => void
 
   // 结束
   endDiscussion: (summary: string) => void
@@ -41,6 +43,7 @@ const initialState = {
   messages: [],
   consensusPoints: [],
   divergencePoints: [],
+  systemSummary: null,
   eventSource: null,
 }
 
@@ -106,6 +109,11 @@ export const useDiscussionStore = create<DiscussionState>((set, get) => ({
     es.addEventListener('discussion_end', (e) => {
       const { summary } = JSON.parse(e.data)
       get().endDiscussion(summary)
+    })
+
+    es.addEventListener('system_summary', (e) => {
+      const data: SystemSummaryEvent = JSON.parse(e.data)
+      get().setSystemSummary(data)
     })
 
     set({ eventSource: es })
@@ -188,6 +196,9 @@ export const useDiscussionStore = create<DiscussionState>((set, get) => ({
       }
       return { divergencePoints: [...s.divergencePoints, point] }
     }),
+
+  setSystemSummary: (summary) =>
+    set({ systemSummary: summary }),
 
   endDiscussion: (summary: string) => {
     // 同步刷新列表状态

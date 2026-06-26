@@ -1,12 +1,13 @@
 import { useState, useRef } from 'react'
 import { useDiscussionStore } from '../../stores/discussionStore'
+import { GradientButton } from '../common/GradientButton'
 
 type Tab = 'consensus' | 'divergence'
 
 export function ConsensusDivergencePanel() {
   const { consensusPoints, divergencePoints } = useDiscussionStore()
   const [tab, setTab] = useState<Tab>('consensus')
-  const [panelHeight, setPanelHeight] = useState(320)
+  const [panelHeight, setPanelHeight] = useState(200)
   const startYRef = useRef(0)
   const startHRef = useRef(0)
 
@@ -40,26 +41,26 @@ export function ConsensusDivergencePanel() {
 
       {/* Tab 切换 */}
       <div className="flex border-b border-border-glow">
-        <button
+        <GradientButton
           onClick={() => setTab('consensus')}
-          className={`flex-1 py-2 text-xs font-semibold transition-colors cursor-pointer
+          className={`gradient-button-ghost flex-1 rounded-none h-[20px] py-0.5 px-5 text-xs font-semibold border-b-2 bg-transparent
             ${tab === 'consensus'
-              ? 'text-accent-cyan border-b-2 border-accent-cyan'
-              : 'text-text-dim hover:text-text-primary'
+              ? 'text-accent-cyan border-accent-cyan'
+              : 'text-text-dim border-transparent hover:text-text-primary'
             }`}
         >
           ✓ 共识 ({consensusPoints.length})
-        </button>
-        <button
+        </GradientButton>
+        <GradientButton
           onClick={() => setTab('divergence')}
-          className={`flex-1 py-2 text-xs font-semibold transition-colors cursor-pointer
+          className={`gradient-button-ghost flex-1 rounded-none h-[20px] py-0.5 px-5 text-xs font-semibold border-b-2 bg-transparent
             ${tab === 'divergence'
-              ? 'text-accent-magenta border-b-2 border-accent-magenta'
-              : 'text-text-dim hover:text-text-primary'
+              ? 'text-accent-magenta border-accent-magenta'
+              : 'text-text-dim border-transparent hover:text-text-primary'
             }`}
         >
           ⚡ 分歧 ({divergencePoints.length})
-        </button>
+        </GradientButton>
       </div>
 
       {/* 内容区 */}

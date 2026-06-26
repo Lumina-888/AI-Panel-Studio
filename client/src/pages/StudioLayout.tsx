@@ -26,20 +26,21 @@ export function StudioLayout() {
         <DiscussionList onNewDiscussion={openCreateModal} />
       </aside>
 
-      {/* 主舞台 — flex-1 占满, max 1300px */}
-      <main className="flex-1 flex flex-col min-w-0">
-        <div className="flex-1 max-w-[1300px] mx-auto w-full">
-          <Outlet />
-        </div>
-        {!isRoom && (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center animate-fade-in-up">
-              <div className="text-5xl mb-5">🎙️</div>
-              <h1 className="text-xl font-bold text-text-primary mb-2">AI Panel Studio</h1>
-              <p className="text-text-dim">从左侧选择讨论，或发起新的圆桌会议</p>
+      {/* 主舞台 — 居中卡片封装二级页面 */}
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden p-4 md:p-6">
+        <div className="flex-1 max-w-[1300px] mx-auto w-full glass-panel rounded-2xl overflow-hidden flex flex-col">
+          {isRoom ? (
+            <Outlet />
+          ) : (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="text-center animate-fade-in-up">
+                <div className="text-5xl mb-5">🎙️</div>
+                <h1 className="text-xl font-bold text-text-primary mb-2">AI Panel Studio</h1>
+                <p className="text-text-dim">从左侧选择讨论，或发起新的圆桌会议</p>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </main>
 
       {/* 右侧专家面板 — 仅在有讨论时显示, 无极宽度 */}

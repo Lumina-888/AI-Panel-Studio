@@ -29,10 +29,10 @@ export function DiscussionRoom() {
   }
 
   return (
-    <div className="max-w-[1300px] mx-auto w-full flex flex-col h-full">
+    <div className="w-full flex flex-col h-full">
       {/* 顶栏 */}
       <header className="h-14 flex items-center pl-4 pr-5 border-b border-border-glow glass-panel shrink-0">
-        <h2 className="text-base font-semibold text-text-primary truncate max-w-[70%]">
+        <h2 className="text-lg font-semibold text-text-primary truncate max-w-[70%]">
           {discussion.topic}
         </h2>
         <PulseDot

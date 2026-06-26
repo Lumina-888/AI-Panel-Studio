@@ -10,11 +10,13 @@ export function PanelistSidebar(_props: Props) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-4 border-b border-border-glow">
-        <h2 className="text-lg font-semibold text-text-primary">专家状态</h2>
-        <p className="text-xs text-text-dim mt-1">
-          {panelists.length} 位嘉宾 · {panelists.filter((p) => p.role === 'expert').length} 位专家
-        </p>
+      <div className="h-14 flex items-center pl-4 pr-5 border-b border-border-glow shrink-0">
+        <div>
+          <h2 className="text-lg font-semibold text-text-primary">专家状态</h2>
+          <p className="text-xs text-text-dim">
+            {panelists.length} 位嘉宾 · {panelists.filter((p) => p.role === 'expert').length} 位专家
+          </p>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-5">

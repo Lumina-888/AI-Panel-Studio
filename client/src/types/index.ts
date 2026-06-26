@@ -69,6 +69,7 @@ export type SSEEventType =
   | 'consensus_update'
   | 'divergence_update'
   | 'discussion_end'
+  | 'system_summary'
 
 export interface PanelistStatusEvent {
   panelist_id: string
@@ -84,4 +85,10 @@ export interface MessageTokenEvent {
   panelist_id: string
   token: string
   seq: number
+}
+
+export interface SystemSummaryEvent {
+  content: string
+  consensus: ConsensusPoint[]
+  divergence: DivergencePoint[]
 }

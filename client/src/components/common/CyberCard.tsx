@@ -12,8 +12,8 @@ const TRACKERS = Array.from({ length: 25 }, (_, i) => `cc-tr-${i + 1}`)
 
 export function CyberCard({
   title = 'CYBER\nCARD',
-  subtitle = 'INTERACTIVE',
-  highlight = '3D EFFECT',
+  subtitle = 'AI',
+  highlight = 'Panel Studio',
   prompt = 'HOVER ME',
   className = '',
 }: CyberCardProps) {
