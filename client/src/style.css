@@ -922,3 +922,16 @@ html, body, #root {
   from { transform: rotate(0); }
   to   { transform: rotate(-1turn); }
 }
+
+/* ===== 减少动效偏好 ===== */
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-glow,
+  .animate-circle-pulse,
+  .animate-dot-pulse,
+  .animate-outline-ripple,
+  .animate-shimmer,
+  .animate-breathe-glow {
+    animation: none !important;
+  }
+}
