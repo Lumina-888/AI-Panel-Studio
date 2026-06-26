@@ -1,3 +1,8 @@
+/**
+ * @deprecated 路由已重构为 HomePage + StudioLayout
+ * 此文件保留作为组件参考，不再被路由引用。
+ */
+
 import { useEffect } from 'react'
 import { Outlet, useParams } from 'react-router-dom'
 import { useAppStore } from '../../stores/appStore'

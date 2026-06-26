@@ -1,0 +1,6 @@
+=== COMMITS ===
+6904e28 schema: add MessageTokenEvent, pinned_at to frontend types
+
+=== DIFF STAT ===
+ client/src/types/index.ts | 8 ++++++++
+ 1 file changed, 8 insertions(+)

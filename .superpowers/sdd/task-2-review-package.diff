@@ -1,0 +1,78 @@
+=== COMMITS ===
+50c5230 schema: add pinned_at to DiscussionRow, streamChat to LLMClient, title/stance to SchedulingContext
+
+=== DIFF STAT ===
+ server/src/types/index.ts | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+=== FULL DIFF ===
+diff --git a/server/src/types/index.ts b/server/src/types/index.ts
+index efd9a8e..54d591e 100644
+--- a/server/src/types/index.ts
++++ b/server/src/types/index.ts
+@@ -6,20 +6,21 @@ export type PanelistStatus = 'standby' | 'preparing' | 'speaking'
+ export type MessageType = 'opening' | 'statement' | 'rebuttal' | 'supplement' | 'closing'
+ 
+ // ===== 数据库行类型 =====
+ 
+ export interface DiscussionRow {
+   id: string
+   topic: string
+   expert_count: number
+   status: DiscussionStatus
+   created_at: string
++  pinned_at: string | null
+ }
+ 
+ export interface PanelistRow {
+   id: string
+   discussion_id: string
+   name: string
+   role: PanelistRole
+   title: string
+   stance: string
+   color: string
+@@ -50,41 +51,42 @@ export interface DivergenceRow {
+   discussion_id: string
+   content: string
+   perspectives: string // SQLite stores JSON string
+   updated_at: string
+ }
+ 
+ // ===== LLM Client =====
+ 
+ export interface LLMClient {
+   chat(messages: { role: string; content: string }[]): Promise<string>
++  streamChat(messages: { role: string; content: string }[]): AsyncGenerator<string>
+ }
+ 
+ // ===== Business Input/Output Types =====
+ 
+ export interface GeneratePanelistsInput {
+   topic: string
+   expert_count: number
+ }
+ 
+ export interface GeneratedPanelist {
+   name: string
+   role: PanelistRole
+   title: string
+   stance: string
+   color: string
+ }
+ 
+ export interface SchedulingContext {
+   topic: string
+   messages: { panelist_id: string; name: string; content: string; type: MessageType }[]
+-  panelists: { id: string; name: string; role: PanelistRole; status: PanelistStatus }[]
++  panelists: { id: string; name: string; role: PanelistRole; title: string; stance: string; status: PanelistStatus }[]
+ }
+ 
+ export interface ConsensusInput {
+   topic: string
+   recentMessages: { panelist_id: string; name: string; content: string }[]
+   existingConsensus: { id: string; content: string; confidence: number }[]
+   existingDivergence: { id: string; content: string; perspectives: string[] }[]
+ }
+ 
+ export interface SchedulingDecision {

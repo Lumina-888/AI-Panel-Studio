@@ -1,6 +1,8 @@
 import { useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { useDiscussionStore } from '../../stores/discussionStore'
+import { LoadingIndicator } from '../common/LoadingIndicator'
+import { PulseDot } from '../common/PulseDot'
 import { TranscriptView } from '../transcript/TranscriptView'
 import { ConsensusDivergencePanel } from '../consensus/ConsensusDivergencePanel'
 
@@ -19,27 +21,24 @@ export function DiscussionRoom() {
 
   if (loading || !discussion) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <p className="text-text-dim">加载讨论中...</p>
+      <div className="flex-1 flex flex-col items-center justify-center gap-4">
+        <LoadingIndicator visible />
+        <p className="text-text-dim text-sm">加载讨论中...</p>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="w-full flex flex-col h-full">
       {/* 顶栏 */}
-      <header className="h-14 flex items-center justify-between px-5 border-b border-border-glow glass-panel shrink-0">
-        <h2 className="text-base font-semibold text-text-primary truncate max-w-[70%]">
+      <header className="h-14 flex items-center pl-4 pr-5 border-b border-border-glow glass-panel shrink-0">
+        <h2 className="text-lg font-semibold text-text-primary truncate max-w-[70%]">
           {discussion.topic}
         </h2>
-        <div className="flex items-center gap-2">
-          <span className={`h-2 w-2 rounded-full ${
-            discussion.status === 'live' ? 'bg-status-green animate-pulse-glow' : 'bg-status-gray'
-          }`} />
-          <span className="text-xs text-text-dim">
-            {discussion.status === 'live' ? '直播中' : discussion.status === 'ended' ? '已结束' : '待开始'}
-          </span>
-        </div>
+        <PulseDot
+          status={discussion.status === 'live' ? 'active' : discussion.status === 'pending' ? 'waiting' : 'ended'}
+          className="ml-3"
+        />
       </header>
 
       {/* Transcript + 共识/分歧 */}

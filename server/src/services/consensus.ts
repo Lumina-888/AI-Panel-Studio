@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { LLMClient, ConsensusInput } from '../types/index.js'
 import { LLMParseError } from '../utils/errors.js'
+import { extractJson } from '../utils/json.js'
 
 const ConsensusItemSchema = z.object({
   content: z.string().min(1),
@@ -61,21 +62,13 @@ ${existingItems.length > 0 ? existingItems.join('\n') : '(尚无)'}
 请分析并返回新发现的共识和分歧。`
 }
 
-function extractJson(response: string): string {
-  const jsonMatch = response.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) {
-    throw new LLMParseError('共识提炼返回中未找到 JSON 结构')
-  }
-  return jsonMatch[0]
-}
-
 function parseResponse(response: string): {
   consensus: { content: string; confidence: number }[]
   divergence: { content: string; perspectives: string[] }[]
 } {
   let data: unknown
   try {
-    data = JSON.parse(extractJson(response))
+    data = JSON.parse(extractJson(response, '共识提炼'))
   } catch {
     throw new LLMParseError('共识提炼返回的 JSON 解析失败')
   }

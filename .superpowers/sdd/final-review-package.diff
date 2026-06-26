@@ -1,0 +1,2553 @@
+=== COMMITS ===
+40592a7 feat: add pin and delete buttons to discussion list cards
+6a9d15f feat: add message_token streaming support to discussionStore
+211b32e feat: add deleteDiscussion and togglePin to appStore
+6904e28 schema: add MessageTokenEvent, pinned_at to frontend types
+d71cc36 feat: add DELETE/PATCH pin endpoints, streaming SSE, updated sorting
+51a5122 feat: split scheduling decision from speech content generation with streaming
+0052098 feat: add streamChat method to LLM client
+50c5230 schema: add pinned_at to DiscussionRow, streamChat to LLMClient, title/stance to SchedulingContext
+c3c2f62 schema: add pinned_at column to discussions
+77fafe2 docs: implementation plan for delete/pin + streaming
+e37f19a docs: delete/pin + streaming design spec
+
+=== DIFF STAT ===
+ .../src/components/discussion/DiscussionList.tsx   |  104 +-
+ client/src/components/layout/Icons.tsx             |   17 +
+ client/src/stores/appStore.ts                      |   24 +-
+ client/src/stores/discussionStore.ts               |   44 +-
+ client/src/types/index.ts                          |    8 +
+ .../plans/2026-06-26-delete-pin-streaming-plan.md  | 1146 ++++++++++++++++++++
+ .../2026-06-26-delete-pin-streaming-design.md      |  177 +++
+ server/migrations/init.sql                         |    3 +
+ server/src/routes/discussions.ts                   |  182 +++-
+ server/src/services/discussion.ts                  |   88 +-
+ server/src/services/llm.ts                         |   14 +
+ server/src/types/index.ts                          |    4 +-
+ 12 files changed, 1765 insertions(+), 46 deletions(-)
+
+=== FULL DIFF ===
+diff --git a/client/src/components/discussion/DiscussionList.tsx b/client/src/components/discussion/DiscussionList.tsx
+index 9d95765..80b75e7 100644
+--- a/client/src/components/discussion/DiscussionList.tsx
++++ b/client/src/components/discussion/DiscussionList.tsx
+@@ -1,28 +1,39 @@
++import { useState } from 'react'
+ import { useNavigate } from 'react-router-dom'
+ import { useAppStore } from '../../stores/appStore'
+-import { PlusIcon } from '../layout/Icons'
++import { PlusIcon, PinIcon, DeleteIcon, CloseIcon } from '../layout/Icons'
+ import type { DiscussionSummary } from '../../types'
+ 
+ interface Props {
+   onNewDiscussion: () => void
+ }
+ 
+ export function DiscussionList({ onNewDiscussion }: Props) {
+-  const { discussions, loading, activeDiscussionId, setActiveDiscussion } = useAppStore()
++  const {
++    discussions, loading, activeDiscussionId,
++    setActiveDiscussion, deleteDiscussion, togglePin,
++  } = useAppStore()
+   const navigate = useNavigate()
++  const [deleteTarget, setDeleteTarget] = useState<DiscussionSummary | null>(null)
+ 
+   const handleSelect = (d: DiscussionSummary) => {
+     setActiveDiscussion(d.id)
+     navigate(`/discussion/${d.id}`)
+   }
+ 
++  const handleDelete = async () => {
++    if (!deleteTarget) return
++    await deleteDiscussion(deleteTarget.id)
++    setDeleteTarget(null)
++  }
++
+   const statusLabel = (s: string) => {
+     switch (s) {
+       case 'live': return '● 进行中'
+       case 'pending': return '○ 待开始'
+       case 'ended': return '◎ 已结束'
+     }
+   }
+ 
+   const statusClass = (s: string) => {
+     switch (s) {
+@@ -52,31 +63,102 @@ export function DiscussionList({ onNewDiscussion }: Props) {
+           <p className="text-text-dim text-sm text-center py-8">加载中...</p>
+         )}
+ 
+         {!loading && discussions.length === 0 && (
+           <p className="text-text-dim text-sm text-center py-8">
+             暂无讨论，点击 + 发起
+           </p>
+         )}
+ 
+         {discussions.map((d) => (
+-          <button
++          <div
+             key={d.id}
+-            onClick={() => handleSelect(d)}
+-            className={`w-full text-left p-3 rounded-xl border transition-all cursor-pointer
++            className={`relative group w-full text-left p-3 rounded-xl border transition-all
+               ${d.id === activeDiscussionId
+                 ? 'border-accent-cyan bg-accent-cyan/10 shadow-[0_0_12px_rgba(0,229,255,0.15)]'
+                 : 'border-white/5 hover:border-white/15 bg-white/[0.02]'
+               }`}
+           >
+-            <p className="text-sm font-medium text-text-primary truncate">{d.topic}</p>
+-            <div className="flex items-center gap-3 mt-1.5 text-xs text-text-dim">
+-              <span className={statusClass(d.status)}>{statusLabel(d.status)}</span>
+-              <span>{d.panelist_count} 位嘉宾</span>
+-              <span>{d.message_count} 条发言</span>
++            {/* 主点击区域 */}
++            <button
++              onClick={() => handleSelect(d)}
++              className="w-full text-left pr-16 cursor-pointer"
++            >
++              <div className="flex items-center gap-1.5">
++                {d.pinned_at && (
++                  <span className="text-accent-cyan shrink-0">
++                    <PinIcon filled />
++                  </span>
++                )}
++                <p className="text-sm font-medium text-text-primary truncate">{d.topic}</p>
++              </div>
++              <div className="flex items-center gap-3 mt-1.5 text-xs text-text-dim">
++                <span className={statusClass(d.status)}>{statusLabel(d.status)}</span>
++                <span>{d.panelist_count} 位嘉宾</span>
++                <span>{d.message_count} 条发言</span>
++              </div>
++            </button>
++
++            {/* 右下角操作按钮 */}
++            <div className="absolute bottom-2 right-2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
++              <button
++                onClick={(e) => { e.stopPropagation(); togglePin(d.id, !d.pinned_at) }}
++                className={`p-1.5 rounded-md transition-colors cursor-pointer
++                  ${d.pinned_at
++                    ? 'text-accent-cyan bg-accent-cyan/10'
++                    : 'text-text-dim hover:text-text-primary hover:bg-white/10'
++                  }`}
++                title={d.pinned_at ? '取消置顶' : '置顶'}
++              >
++                <PinIcon filled={!!d.pinned_at} />
++              </button>
++              <button
++                onClick={(e) => { e.stopPropagation(); setDeleteTarget(d) }}
++                className="p-1.5 rounded-md text-text-dim hover:text-red-400 hover:bg-red-400/10 transition-colors cursor-pointer"
++                title="删除讨论"
++              >
++                <DeleteIcon />
++              </button>
+             </div>
+-          </button>
++          </div>
+         ))}
+       </div>
++
++      {/* 删除确认弹窗 */}
++      {deleteTarget && (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
++          <div className="bg-surface-dark border border-border-glow rounded-2xl p-6 w-80 shadow-2xl">
++            <div className="flex items-center justify-between mb-4">
++              <h3 className="text-lg font-semibold text-text-primary">确认删除</h3>
++              <button
++                onClick={() => setDeleteTarget(null)}
++                className="p-1 rounded-md hover:bg-white/10 text-text-dim hover:text-text-primary transition-colors cursor-pointer"
++              >
++                <CloseIcon />
++              </button>
++            </div>
++            <p className="text-sm text-text-dim mb-2">
++              确定要删除以下讨论吗？此操作不可撤销。
++            </p>
++            <p className="text-sm font-medium text-text-primary mb-6 truncate">
++              "{deleteTarget.topic}"
++            </p>
++            <div className="flex gap-3">
++              <button
++                onClick={() => setDeleteTarget(null)}
++                className="flex-1 py-2 px-4 rounded-xl border border-white/10 text-text-dim hover:text-text-primary hover:bg-white/5 transition-colors cursor-pointer text-sm"
++              >
++                取消
++              </button>
++              <button
++                onClick={handleDelete}
++                className="flex-1 py-2 px-4 rounded-xl bg-red-500/20 border border-red-500/30 text-red-400 hover:bg-red-500/30 transition-colors cursor-pointer text-sm font-medium"
++              >
++                确认删除
++              </button>
++            </div>
++          </div>
++        </div>
++      )}
+     </div>
+   )
+ }
+diff --git a/client/src/components/layout/Icons.tsx b/client/src/components/layout/Icons.tsx
+index 7b8429f..1e05a14 100644
+--- a/client/src/components/layout/Icons.tsx
++++ b/client/src/components/layout/Icons.tsx
+@@ -25,10 +25,27 @@ export function PlusIcon() {
+   )
+ }
+ 
+ export function CloseIcon() {
+   return (
+     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+       <path d="M18 6 6 18M6 6l12 12" />
+     </svg>
+   )
+ }
++
++export function PinIcon({ filled = false }: { filled?: boolean }) {
++  return (
++    <svg width="16" height="16" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2">
++      <path d="M12 2v20M5 9l7-7 7 7" />
++    </svg>
++  )
++}
++
++export function DeleteIcon() {
++  return (
++    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
++      <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
++      <path d="M10 11v6M14 11v6" />
++    </svg>
++  )
++}
+diff --git a/client/src/stores/appStore.ts b/client/src/stores/appStore.ts
+index 78e9671..e6108f6 100644
+--- a/client/src/stores/appStore.ts
++++ b/client/src/stores/appStore.ts
+@@ -8,23 +8,27 @@ interface AppState {
+   fetchDiscussions: () => Promise<void>
+ 
+   // 当前活跃讨论
+   activeDiscussionId: string | null
+   setActiveDiscussion: (id: string | null) => void
+ 
+   // 创建讨论弹窗
+   createModalOpen: boolean
+   openCreateModal: () => void
+   closeCreateModal: () => void
++
++  // 删除 & 置顶
++  deleteDiscussion: (id: string) => Promise<void>
++  togglePin: (id: string, pinned: boolean) => Promise<void>
+ }
+ 
+-export const useAppStore = create<AppState>((set) => ({
++export const useAppStore = create<AppState>((set, get) => ({
+   discussions: [],
+   loading: false,
+ 
+   fetchDiscussions: async () => {
+     set({ loading: true })
+     try {
+       const res = await fetch('/api/discussions')
+       const data = await res.json()
+       const list = Array.isArray(data) ? data : (data.discussions || [])
+       const discussions = list.map((d: any) => ({
+@@ -41,11 +45,29 @@ export const useAppStore = create<AppState>((set) => ({
+       set({ loading: false })
+     }
+   },
+ 
+   activeDiscussionId: null,
+   setActiveDiscussion: (id) => set({ activeDiscussionId: id }),
+ 
+   createModalOpen: false,
+   openCreateModal: () => set({ createModalOpen: true }),
+   closeCreateModal: () => set({ createModalOpen: false }),
++
++  deleteDiscussion: async (id) => {
++    await fetch(`/api/discussions/${id}`, { method: 'DELETE' })
++    set((s) => ({
++      discussions: s.discussions.filter(d => d.id !== id),
++      activeDiscussionId: s.activeDiscussionId === id ? null : s.activeDiscussionId,
++    }))
++  },
++
++  togglePin: async (id, pinned) => {
++    await fetch(`/api/discussions/${id}/pin`, {
++      method: 'PATCH',
++      headers: { 'Content-Type': 'application/json' },
++      body: JSON.stringify({ pinned }),
++    })
++    // Re-fetch list for correct sort order
++    await get().fetchDiscussions()
++  },
+ }))
+diff --git a/client/src/stores/discussionStore.ts b/client/src/stores/discussionStore.ts
+index 2422f56..71836b6 100644
+--- a/client/src/stores/discussionStore.ts
++++ b/client/src/stores/discussionStore.ts
+@@ -16,20 +16,21 @@ interface DiscussionState {
+   // SSE 连接
+   eventSource: EventSource | null
+ 
+   // 动作
+   fetchDiscussion: (id: string) => Promise<void>
+   connectSSE: (discussionId: string) => void
+   disconnectSSE: () => void
+ 
+   // 实时更新
+   addMessage: (msg: Message) => void
++  appendMessageToken: (panelist_id: string, token: string, seq: number) => void
+   updatePanelistStatus: (e: PanelistStatusEvent) => void
+   upsertConsensus: (point: ConsensusPoint) => void
+   upsertDivergence: (point: DivergencePoint) => void
+ 
+   // 结束
+   endDiscussion: (summary: string) => void
+   reset: () => void
+ }
+ 
+ const initialState = {
+@@ -50,20 +51,21 @@ export const useDiscussionStore = create<DiscussionState>((set, get) => ({
+     try {
+       const res = await fetch(`/api/discussions/${id}`)
+       const data = await res.json()
+       set({
+         discussion: {
+           id: data.id,
+           topic: data.topic,
+           expert_count: data.expert_count,
+           status: data.status,
+           created_at: data.created_at,
++          pinned_at: data.pinned_at ?? null,
+         },
+         panelists: data.panelists || [],
+         messages: data.messages || [],
+         consensusPoints: data.consensus || [],
+         divergencePoints: data.divergence || [],
+         loading: false,
+       })
+     } catch {
+       set({ loading: false })
+     }
+@@ -73,20 +75,25 @@ export const useDiscussionStore = create<DiscussionState>((set, get) => ({
+     const existing = get().eventSource
+     if (existing) existing.close()
+ 
+     const es = new EventSource(`/api/discussions/${discussionId}/stream`)
+ 
+     es.addEventListener('panelist_status', (e) => {
+       const data: PanelistStatusEvent = JSON.parse(e.data)
+       get().updatePanelistStatus(data)
+     })
+ 
++    es.addEventListener('message_token', (e) => {
++      const data: { panelist_id: string; token: string; seq: number } = JSON.parse(e.data)
++      get().appendMessageToken(data.panelist_id, data.token, data.seq)
++    })
++
+     es.addEventListener('transcript_message', (e) => {
+       const msg: Message = JSON.parse(e.data)
+       get().addMessage(msg)
+     })
+ 
+     es.addEventListener('consensus_update', (e) => {
+       const point: ConsensusPoint = JSON.parse(e.data)
+       get().upsertConsensus(point)
+     })
+ 
+@@ -106,22 +113,57 @@ export const useDiscussionStore = create<DiscussionState>((set, get) => ({
+   disconnectSSE: () => {
+     const es = get().eventSource
+     if (es) {
+       es.close()
+       set({ eventSource: null })
+     }
+   },
+ 
+   addMessage: (msg) =>
+     set((s) => {
++      // Dedup by id
+       if (s.messages.some(m => m.id === msg.id)) return s
+-      return { messages: [...s.messages, msg] }
++      // Replace streaming placeholder (same seq, streaming- prefix)
++      const idxBySeq = s.messages.findIndex(m => m.seq === msg.seq && m.id.startsWith('streaming-'))
++      if (idxBySeq >= 0) {
++        const updated = [...s.messages]
++        updated[idxBySeq] = msg
++        return { messages: updated }
++      }
++      return { messages: [...s.messages, msg].sort((a, b) => a.seq - b.seq) }
++    }),
++
++  appendMessageToken: (panelist_id, token, seq) =>
++    set((s) => {
++      const idx = s.messages.findIndex(m => m.seq === seq)
++      if (idx >= 0) {
++        // Existing placeholder — append token
++        const updated = [...s.messages]
++        updated[idx] = { ...updated[idx], content: updated[idx].content + token }
++        return { messages: updated }
++      }
++      // No placeholder yet — create one
++      const placeholder: Message = {
++        id: `streaming-${seq}`,
++        discussion_id: s.discussion?.id ?? '',
++        panelist_id,
++        name: s.panelists.find(p => p.id === panelist_id)?.name ?? '',
++        title: s.panelists.find(p => p.id === panelist_id)?.title ?? '',
++        color: s.panelists.find(p => p.id === panelist_id)?.color ?? '#888888',
++        content: token,
++        type: 'statement',
++        seq,
++        created_at: new Date().toISOString(),
++      }
++      // Insert sorted by seq
++      const inserted = [...s.messages, placeholder].sort((a, b) => a.seq - b.seq)
++      return { messages: inserted }
+     }),
+ 
+   updatePanelistStatus: ({ panelist_id, status, focus }) =>
+     set((s) => ({
+       panelists: s.panelists.map((p) =>
+         p.id === panelist_id ? { ...p, status, focus } : p
+       ),
+     })),
+ 
+   upsertConsensus: (point) =>
+diff --git a/client/src/types/index.ts b/client/src/types/index.ts
+index 070bc64..f2e499d 100644
+--- a/client/src/types/index.ts
++++ b/client/src/types/index.ts
+@@ -4,20 +4,21 @@ export type DiscussionStatus = 'pending' | 'live' | 'ended'
+ export type PanelistRole = 'host' | 'expert'
+ export type PanelistStatus = 'standby' | 'preparing' | 'speaking'
+ export type MessageType = 'opening' | 'statement' | 'rebuttal' | 'supplement' | 'closing'
+ 
+ export interface Discussion {
+   id: string
+   topic: string
+   expert_count: number
+   status: DiscussionStatus
+   created_at: string
++  pinned_at: string | null
+ }
+ 
+ export interface DiscussionSummary extends Discussion {
+   panelist_count: number
+   message_count: number
+ }
+ 
+ export interface Panelist {
+   id: string
+   discussion_id: string
+@@ -57,23 +58,30 @@ export interface DivergencePoint {
+   content: string
+   perspectives: string[]
+   updated_at: string
+ }
+ 
+ // ===== SSE 事件类型 =====
+ 
+ export type SSEEventType =
+   | 'panelist_status'
+   | 'transcript_message'
++  | 'message_token'
+   | 'consensus_update'
+   | 'divergence_update'
+   | 'discussion_end'
+ 
+ export interface PanelistStatusEvent {
+   panelist_id: string
+   status: PanelistStatus
+   focus: string
+ }
+ 
+ export interface DiscussionEndEvent {
+   summary: string
+ }
++
++export interface MessageTokenEvent {
++  panelist_id: string
++  token: string
++  seq: number
++}
+diff --git a/docs/superpowers/plans/2026-06-26-delete-pin-streaming-plan.md b/docs/superpowers/plans/2026-06-26-delete-pin-streaming-plan.md
+new file mode 100644
+index 0000000..a4cc9d6
+--- /dev/null
++++ b/docs/superpowers/plans/2026-06-26-delete-pin-streaming-plan.md
+@@ -0,0 +1,1146 @@
++# 讨论删除/置顶 + 流式输出 实现计划
++
++> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
++
++**Goal:** 实现讨论列表右下角删除/置顶按钮 + 专家发言 token-by-token 流式输出
++
++**Architecture:** 数据库新增 pinned_at 列；后端新增 DELETE/PATCH 端点，拆分 decideNextSpeaker 为调度决策+流式内容生成两步；前端 DiscussionList 新增按钮+确认弹窗，discussionStore 新增 message_token 事件处理实现逐 token 追加
++
++**Tech Stack:** React 19 + TypeScript + Vite + Tailwind CSS v4 + Zustand v5 / Express 5 + sql.js + DeepSeek API (OpenAI 兼容)
++
++## Global Constraints
++
++- 置顶允许多条，按 pinned_at 倒序
++- 删除需确认弹窗，删除活跃讨论后跳回首页
++- 流式输出：调度决策（非流式）→ token-by-token SSE 推送 → 最终 transcript_message
++- SSE 新增 `message_token` 事件类型
++- 所有 UI 文本使用中文
++
++---
++
++### Task 1: 数据库 Schema — 新增 pinned_at 列
++
++**Files:**
++- Modify: `server/migrations/init.sql`
++
++**Interfaces:**
++- Produces: `discussions.pinned_at TIMESTAMP` 列，NULL 表示未置顶
++
++- [ ] **Step 1: 在 init.sql 末尾添加 ALTER TABLE 语句**
++
++在 `server/migrations/init.sql` 末尾追加：
++
++```sql
++-- v2: 讨论置顶
++ALTER TABLE discussions ADD COLUMN pinned_at TIMESTAMP;
++```
++
++说明：`initDb()` 会运行所有语句，若列已存在则 catch 错误并继续，兼容已有数据库。
++
++- [ ] **Step 2: 验证数据库迁移**
++
++```bash
++cd server && npx tsx -e "
++import { initDb, getDb, queryAll } from './src/db/index.js';
++await initDb();
++const db = await getDb();
++const cols = queryAll(db, 'PRAGMA table_info(discussions)');
++console.log('columns:', cols.map(c => c.name));
++"
++```
++
++Expected: 输出中包含 `pinned_at`
++
++- [ ] **Step 3: Commit**
++
++```bash
++git add server/migrations/init.sql
++git commit -m "schema: add pinned_at column to discussions"
++```
++
++---
++
++### Task 2: 后端类型 — LLMClient 增加 streamChat + DiscussionRow 增加 pinned_at
++
++**Files:**
++- Modify: `server/src/types/index.ts`
++
++**Interfaces:**
++- Produces: `LLMClient.streamChat`, `DiscussionRow.pinned_at`
++
++- [ ] **Step 1: 修改 DiscussionRow、LLMClient 和 SchedulingContext**
++
++[server/src/types/index.ts:10-16] 修改 `DiscussionRow`：
++
++```typescript
++export interface DiscussionRow {
++  id: string
++  topic: string
++  expert_count: number
++  status: DiscussionStatus
++  created_at: string
++  pinned_at: string | null
++}
++```
++
++[server/src/types/index.ts:58-60] 修改 `LLMClient`：
++
++```typescript
++export interface LLMClient {
++  chat(messages: { role: string; content: string }[]): Promise<string>
++  streamChat(messages: { role: string; content: string }[]): AsyncGenerator<string>
++}
++```
++
++[server/src/types/index.ts:77-81] 修改 `SchedulingContext.panelists` 增加 `title` 和 `stance`：
++
++```typescript
++export interface SchedulingContext {
++  topic: string
++  messages: { panelist_id: string; name: string; content: string; type: MessageType }[]
++  panelists: { id: string; name: string; role: PanelistRole; title: string; stance: string; status: PanelistStatus }[]
++}
++```
++
++- [ ] **Step 2: 验证 TypeScript 编译**
++
++```bash
++cd server && npx tsc --noEmit
++```
++
++Expected: 可能有暂时性错误（llm.ts 还未实现 streamChat），确认只有可预期的错误。
++
++- [ ] **Step 3: Commit**
++
++```bash
++git add server/src/types/index.ts
++git commit -m "schema: add pinned_at to DiscussionRow and streamChat to LLMClient"
++```
++
++---
++
++### Task 3: LLM 服务 — 实现流式调用
++
++**Files:**
++- Modify: `server/src/services/llm.ts`
++
++**Interfaces:**
++- Consumes: `LLMClient` interface（Task 2 已修改）
++- Produces: `createLLMClient()` 返回的 `streamChat` 方法
++
++- [ ] **Step 1: 实现 streamChat**
++
++将 [server/src/services/llm.ts](server/src/services/llm.ts) 中的 `createLLMClient` 修改为：
++
++```typescript
++import OpenAI from 'openai'
++import type { LLMClient } from '../types/index.js'
++
++export function createLLMClient(apiKey: string): LLMClient {
++  const client = new OpenAI({
++    baseURL: 'https://api.deepseek.com/v1',
++    apiKey,
++  })
++
++  return {
++    async chat(messages) {
++      const res = await client.chat.completions.create({
++        model: 'deepseek-chat',
++        messages: messages as Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
++        temperature: 0.8,
++      })
++      return res.choices[0]?.message?.content ?? ''
++    },
++
++    async *streamChat(messages) {
++      const stream = await client.chat.completions.create({
++        model: 'deepseek-chat',
++        messages: messages as Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
++        temperature: 0.8,
++        stream: true,
++      })
++
++      for await (const chunk of stream) {
++        const delta = chunk.choices[0]?.delta?.content
++        if (delta) yield delta
++      }
++    },
++  }
++}
++```
++
++- [ ] **Step 2: 验证编译**
++
++```bash
++cd server && npx tsc --noEmit
++```
++
++Expected: `server/src/services/llm.ts` 无错误
++
++- [ ] **Step 3: Commit**
++
++```bash
++git add server/src/services/llm.ts
++git commit -m "feat: add streamChat method to LLM client"
++```
++
++---
++
++### Task 4: 讨论服务 — 拆分 decideNextSpeaker + 新增 generateSpeechStream
++
++**Files:**
++- Modify: `server/src/services/discussion.ts`
++
++**Interfaces:**
++- Consumes: `LLMClient.streamChat`（Task 3）
++- Produces: `decideNextSpeaker()` 返回 `{ panelist_id, type }`（无 content）；`generateSpeechStream()` 返回 `AsyncGenerator<string>`；`generateSpeechContent()` 返回 `Promise<string>`
++
++- [ ] **Step 1: 修改 SchedulingResponseSchema 和 buildSystemPrompt**
++
++[discussion.ts:9-13] 修改 schema：
++
++```typescript
++const SchedulingResponseSchema = z.object({
++  panelist_id: z.string().min(1),
++  type: z.string(),
++})
++```
++
++[discussion.ts:15-28] 修改 system prompt（不再要求 LLM 生成 content）：
++
++```typescript
++function buildSystemPrompt(): string {
++  return `你是一个圆桌讨论的调度员。根据当前讨论状态，决定下一位发言的嘉宾。
++
++规则：
++1. 分析所有嘉宾的角色和当前讨论进展，决定谁最应该下一个发言
++2. 主持人(host)负责开场(opening)、串场追问、收尾总结(closing)
++3. 专家(expert)进行观点陈述(statement)、补充(supplement)、反驳(rebuttal)
++4. 非轮询制：哪位专家观点最需要被听到，就安排谁发言
++5. 鼓励观点碰撞：如果最近发言存在可争议的点，优先安排持不同立场的专家反驳
++6. 如果讨论已经充分（通常 10-15 轮发言后），主持人可以做总结(closing)并结束讨论
++
++严格以 JSON 格式返回（只做调度，不写发言内容）：
++{"panelist_id": "嘉宾ID", "type": "opening|statement|rebuttal|supplement|closing"}`
++}
++```
++
++- [ ] **Step 2: 修改 parseResponse 和解构**
++
++[discussion.ts:67-96] 修改 `parseResponse` 返回类型：
++
++```typescript
++function parseResponse(
++  response: string,
++  ctx: SchedulingContext
++): { panelist_id: string; type: MessageType } {
++  let data: unknown
++  try {
++    data = JSON.parse(extractJson(response))
++  } catch {
++    throw new LLMParseError('LLM 返回的 JSON 解析失败')
++  }
++
++  const result = SchedulingResponseSchema.safeParse(data)
++  if (!result.success) {
++    const issues = result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')
++    throw new LLMParseError(`发言调度返回格式不符合预期: ${issues}`)
++  }
++
++  const { panelist_id, type } = result.data
++
++  const validIds = ctx.panelists.map(p => p.id)
++  if (!validIds.includes(panelist_id)) {
++    throw new LLMParseError(`LLM 返回了不存在的嘉宾 ID: ${panelist_id}`)
++  }
++
++  return {
++    panelist_id,
++    type: normalizeMessageType(type),
++  }
++}
++```
++
++- [ ] **Step 3: 修改 decideNextSpeaker 签名和返回**
++
++[discussion.ts:108-129] 修改函数签名和 log：
++
++```typescript
++export async function decideNextSpeaker(
++  ctx: SchedulingContext,
++  llm: LLMClient
++): Promise<{ panelist_id: string; type: MessageType }> {
++  if (ctx.panelists.length === 0) {
++    throw new ValidationError('嘉宾列表不能为空')
++  }
++
++  console.log('[discussion] 开始发言调度, topic:', ctx.topic, 'panelist_count:', ctx.panelists.length, 'msg_count:', ctx.messages.length)
++
++  const messages = [
++    { role: 'system', content: buildSystemPrompt() },
++    { role: 'user', content: buildUserPrompt(ctx) },
++  ]
++
++  const response = await llm.chat(messages)
++  const result = parseResponse(response, ctx)
++  checkConsecutiveRule(ctx, result.panelist_id)
++
++  console.log('[discussion] 发言调度完成, next:', result.panelist_id, 'type:', result.type)
++  return result
++}
++```
++
++- [ ] **Step 4: 新增 generateSpeechStream 和 generateSpeechContent**
++
++在文件末尾追加（`export async function decideNextSpeaker` 之后，最后一个 `}` 之前不行，要追加到文件末尾）：
++
++```typescript
++// ===== 流式发言内容生成 =====
++
++function buildSpeechSystemPrompt(): string {
++  return `你正在参加一场圆桌讨论。根据你的角色和立场，针对当前话题发表观点。
++
++要求：
++1. 严格以第一人称发言，直接输出对话内容，不加引号、不署名、不加角色标注
++2. 控制在 1-2 句话（约 50-150 字）
++3. 语言自然、口语化，像是在真实对话
++4. 根据你的立场和角色表达观点，可适当回应或反驳前面的发言
++5. 只输出发言原文，不输出任何其他内容`
++}
++
++function buildSpeechUserPrompt(
++  ctx: SchedulingContext,
++  decision: { panelist_id: string; type: MessageType }
++): string {
++  const panelist = ctx.panelists.find(p => p.id === decision.panelist_id)
++  if (!panelist) throw new ValidationError('未找到发言嘉宾')
++
++  const history =
++    ctx.messages.length > 0
++      ? ctx.messages.slice(-8).map(m => `[${m.name}](${m.type}): ${m.content}`).join('\n')
++      : '(讨论尚未开始，你是第一个发言)'
++
++  const typeHint: Record<string, string> = {
++    opening: '你是主持人，请做一个精彩的开场白，引出话题',
++    closing: '你是主持人，请对讨论进行总结收尾',
++    statement: '请陈述你的核心观点',
++    rebuttal: '请针对最近的不同观点进行反驳',
++    supplement: '请在已有讨论基础上补充你的见解',
++  }
++
++  return `讨论话题：${ctx.topic}
++
++你的身份：
++- 名字：${panelist.name}
++- 角色：${panelist.role === 'host' ? '主持人' : '专家'}
++- 头衔：${panelist.title}
++- 立场：${panelist.stance}
++
++发言类型：${decision.type} — ${typeHint[decision.type] || '请发表观点'}
++
++最近讨论记录：
++${history}
++
++现在请你以 ${panelist.name} 的身份发言。只输出发言原文。`
++}
++
++export async function* generateSpeechStream(
++  ctx: SchedulingContext,
++  decision: { panelist_id: string; type: MessageType },
++  llm: LLMClient
++): AsyncGenerator<string> {
++  const messages = [
++    { role: 'system', content: buildSpeechSystemPrompt() },
++    { role: 'user', content: buildSpeechUserPrompt(ctx, decision) },
++  ]
++
++  for await (const token of llm.streamChat(messages)) {
++    yield token
++  }
++}
++
++export async function generateSpeechContent(
++  ctx: SchedulingContext,
++  decision: { panelist_id: string; type: MessageType },
++  llm: LLMClient
++): Promise<string> {
++  let content = ''
++  for await (const token of generateSpeechStream(ctx, decision, llm)) {
++    content += token
++  }
++  return content
++}
++```
++
++- [ ] **Step 5: 验证编译**
++
++```bash
++cd server && npx tsc --noEmit
++```
++
++Expected: `server/src/services/discussion.ts` 无错误
++
++- [ ] **Step 6: Commit**
++
++```bash
++git add server/src/services/discussion.ts
++git commit -m "feat: split scheduling decision from speech content generation with streaming"
++```
++
++---
++
++### Task 5: 后端路由 — DELETE/PATCH 端点 + 排序 + SSE 流式改造
++
++**Files:**
++- Modify: `server/src/routes/discussions.ts`
++
++**Interfaces:**
++- Consumes: `decideNextSpeaker`（新签名）、`generateSpeechStream`、`generateSpeechContent`（Task 4）
++- Produces: `DELETE /api/discussions/:id`、`PATCH /api/discussions/:id/pin`、修改排序、SSE message_token 事件、修改 confirm/start/next-step
++
++- [ ] **Step 1: 更新 import**
++
++[routes/discussions.ts:6] 修改 import：
++
++```typescript
++import { decideNextSpeaker, generateSpeechStream, generateSpeechContent } from '../services/discussion.js'
++```
++
++- [ ] **Step 2: 修改 GET / 排序**
++
++[routes/discussions.ts:33] 修改排序 SQL：
++
++```typescript
++const discussions = queryAll(db,
++  'SELECT * FROM discussions ORDER BY pinned_at IS NOT NULL DESC, pinned_at DESC, created_at DESC'
++) as DiscussionRow[]
++```
++
++- [ ] **Step 3: 新增 DELETE 端点**
++
++在 `GET /:id` 之后、`POST /:id/confirm` 之前插入：
++
++```typescript
++// DELETE /api/discussions/:id — 删除讨论
++router.delete('/:id', async (req: Request, res: Response) => {
++  try {
++    const db = await getDb()
++    const discussion = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [req.params.id]) as DiscussionRow | undefined
++    if (!discussion) {
++      res.status(404).json({ error: '讨论不存在' })
++      return
++    }
++
++    // FK ON DELETE CASCADE 自动删除关联数据
++    execute(db, 'DELETE FROM discussions WHERE id = ?', [req.params.id])
++
++    console.log('[DELETE /api/discussions/:id] 讨论已删除, id:', req.params.id)
++    res.json({ success: true })
++  } catch (e) {
++    console.error('[DELETE /api/discussions/:id] 错误:', e)
++    res.status(500).json({ error: '删除讨论失败' })
++  }
++})
++```
++
++- [ ] **Step 4: 新增 PATCH pin 端点**
++
++在 DELETE 端点之后插入：
++
++```typescript
++// PATCH /api/discussions/:id/pin — 置顶/取消置顶
++router.patch('/:id/pin', async (req: Request, res: Response) => {
++  try {
++    const db = await getDb()
++    const discussion = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [req.params.id]) as DiscussionRow | undefined
++    if (!discussion) {
++      res.status(404).json({ error: '讨论不存在' })
++      return
++    }
++
++    const { pinned } = req.body
++    if (pinned) {
++      execute(db, "UPDATE discussions SET pinned_at = datetime('now') WHERE id = ?", [req.params.id])
++    } else {
++      execute(db, 'UPDATE discussions SET pinned_at = NULL WHERE id = ?', [req.params.id])
++    }
++
++    const updated = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [req.params.id]) as DiscussionRow
++    console.log('[PATCH /api/discussions/:id/pin] 置顶状态更新, id:', req.params.id, 'pinned:', pinned)
++    res.json(updated)
++  } catch (e) {
++    console.error('[PATCH /api/discussions/:id/pin] 错误:', e)
++    res.status(500).json({ error: '置顶操作失败' })
++  }
++})
++```
++
++- [ ] **Step 5: 修改 POST /:id/confirm — 适配拆分后的调用**
++
++将 confirm 端点中的 `decideNextSpeaker` 调用和消息插入逻辑改为：
++
++```typescript
++const decision = await decideNextSpeaker(
++  {
++    topic: discussion.topic,
++    panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
++    messages: messages.map(m => ({ panelist_id: m.panelist_id, name: '', content: m.content, type: m.type })),
++  },
++  llm
++)
++
++const msgId = uuidv4()
++const nextSeq = messages.length + 1
++execute(db,
++  'INSERT INTO messages (id, discussion_id, panelist_id, content, type, seq) VALUES (?, ?, ?, ?, ?, ?)',
++  [msgId, req.params.id, decision.panelist_id, '', decision.type, nextSeq]
++)
++
++execute(db, 'UPDATE panelists SET status = ? WHERE id = ?', ['speaking', decision.panelist_id])
++execute(db, 'INSERT INTO panelist_status_logs (id, panelist_id, status, focus) VALUES (?, ?, ?, ?)',
++  [uuidv4(), decision.panelist_id, 'speaking', null]
++)
++
++// 生成发言内容（非流式，REST 端点收集全部 token）
++const panelistNameMap: Record<string, string> = {}
++for (const p of panelists) {
++  panelistNameMap[p.id] = p.name
++}
++const speechContent = await generateSpeechContent(
++  {
++    topic: discussion.topic,
++    panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
++    messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
++  },
++  decision,
++  llm
++)
++
++execute(db, 'UPDATE messages SET content = ? WHERE id = ?', [speechContent, msgId])
++```
++
++- [ ] **Step 6: 修改 POST /:id/start — 相同适配**
++
++将 `/start` 端点中同样的逻辑做与 Step 5 相同的改造（decideNextSpeaker → 插入空 content → 生成内容 → UPDATE）。
++
++- [ ] **Step 7: 修改 POST /:id/next-step — 相同适配**
++
++将 `/next-step` 端点中同样的逻辑做与 Step 5 相同的改造。
++
++- [ ] **Step 8: 修改 SSE GET /:id/stream — 流式推送改造**
++
++将 SSE 主循环中的发言处理逻辑（从 `const decision = await decideNextSpeaker(...)` 到发送 `transcript_message` 之间的代码）替换为：
++
++```typescript
++const decision = await decideNextSpeaker(
++  {
++    topic: discussion.topic,
++    panelists: currentPanelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
++    messages: currentMessages.map(m => ({
++      panelist_id: m.panelist_id,
++      name: nameMap[m.panelist_id] || '',
++      content: m.content,
++      type: m.type,
++    })),
++  },
++  llm
++)
++
++if (aborted) break
++
++// 写入占位消息
++const msgId = uuidv4()
++const nextSeq = currentMessages.length + 1
++execute(db,
++  'INSERT INTO messages (id, discussion_id, panelist_id, content, type, seq) VALUES (?, ?, ?, ?, ?, ?)',
++  [msgId, req.params.id, decision.panelist_id, '', decision.type, nextSeq]
++)
++
++// 更新 panelist 状态
++execute(db, 'UPDATE panelists SET status = ? WHERE discussion_id = ? AND status = ?', ['standby', req.params.id, 'speaking'])
++execute(db, 'UPDATE panelists SET status = ? WHERE id = ?', ['speaking', decision.panelist_id])
++execute(db, 'INSERT INTO panelist_status_logs (id, panelist_id, status, focus) VALUES (?, ?, ?, ?)',
++  [uuidv4(), decision.panelist_id, 'speaking', null]
++)
++
++// 发送 panelist_status 事件
++const updatedPanelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
++for (const p of updatedPanelists) {
++  sendEvent('panelist_status', {
++    panelist_id: p.id,
++    status: p.status,
++    focus: p.focus,
++  })
++}
++
++// 流式生成发言内容
++let fullContent = ''
++try {
++  for await (const token of generateSpeechStream(
++    {
++      topic: discussion.topic,
++      panelists: currentPanelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
++      messages: currentMessages.map(m => ({
++        panelist_id: m.panelist_id,
++        name: nameMap[m.panelist_id] || '',
++        content: m.content,
++        type: m.type,
++      })),
++    },
++    decision,
++    llm
++  )) {
++    if (aborted) break
++    fullContent += token
++    sendEvent('message_token', {
++      panelist_id: decision.panelist_id,
++      token,
++      seq: nextSeq,
++    })
++  }
++} catch (streamErr) {
++  console.error('[SSE] 流式生成失败:', streamErr)
++  if (!aborted && fullContent.length === 0) {
++    fullContent = '（发言生成失败）'
++  }
++}
++
++if (aborted) break
++
++// 持久化完整内容
++execute(db, 'UPDATE messages SET content = ? WHERE id = ?', [fullContent, msgId])
++
++// 发送完整 transcript_message
++const speaker = updatedPanelists.find(p => p.id === decision.panelist_id)
++sendEvent('transcript_message', {
++  id: msgId,
++  discussion_id: req.params.id,
++  panelist_id: decision.panelist_id,
++  name: speaker?.name ?? nameMap[decision.panelist_id] ?? '未知',
++  title: speaker?.title ?? '',
++  color: speaker?.color ?? '#888888',
++  content: fullContent,
++  type: decision.type,
++  seq: nextSeq,
++  created_at: new Date().toISOString(),
++})
++```
++
++- [ ] **Step 9: 验证编译**
++
++```bash
++cd server && npx tsc --noEmit
++```
++
++Expected: 无错误
++
++- [ ] **Step 10: Commit**
++
++```bash
++git add server/src/routes/discussions.ts
++git commit -m "feat: add DELETE/PATCH pin endpoints, streaming SSE, updated sorting"
++```
++
++---
++
++### Task 6: 前端类型 — 新增 MessageTokenEvent + pinned_at
++
++**Files:**
++- Modify: `client/src/types/index.ts`
++
++**Interfaces:**
++- Produces: `MessageTokenEvent`, `Discussion.pinned_at`, 更新 `SSEEventType`
++
++- [ ] **Step 1: 修改 Discussion 接口和 SSE 类型**
++
++[types/index.ts:8-14] Discussion 增加字段：
++
++```typescript
++export interface Discussion {
++  id: string
++  topic: string
++  expert_count: number
++  status: DiscussionStatus
++  created_at: string
++  pinned_at: string | null
++}
++```
++
++[types/index.ts:64-69] SSEEventType 更新：
++
++```typescript
++export type SSEEventType =
++  | 'panelist_status'
++  | 'transcript_message'
++  | 'message_token'
++  | 'consensus_update'
++  | 'divergence_update'
++  | 'discussion_end'
++```
++
++在 `DiscussionEndEvent` 之后追加：
++
++```typescript
++export interface MessageTokenEvent {
++  panelist_id: string
++  token: string
++  seq: number
++}
++```
++
++- [ ] **Step 2: 验证编译**
++
++```bash
++cd client && npx tsc --noEmit
++```
++
++Expected: 可能有暂时性错误（stores 中还未使用新类型），确认只有可预期的错误。
++
++- [ ] **Step 3: Commit**
++
++```bash
++git add client/src/types/index.ts
++git commit -m "schema: add MessageTokenEvent, pinned_at to frontend types"
++```
++
++---
++
++### Task 7: App Store — deleteDiscussion + togglePin
++
++**Files:**
++- Modify: `client/src/stores/appStore.ts`
++
++**Interfaces:**
++- Consumes: Discussion 新增 `pinned_at`（Task 6）
++- Produces: `deleteDiscussion(id)`、`togglePin(id, pinned)`
++
++- [ ] **Step 1: 更新 AppState interface 和实现**
++
++在 [appStore.ts:4-18] `AppState` interface 中添加：
++
++```typescript
++interface AppState {
++  // 讨论列表
++  discussions: DiscussionSummary[]
++  loading: boolean
++  fetchDiscussions: () => Promise<void>
++
++  // 当前活跃讨论
++  activeDiscussionId: string | null
++  setActiveDiscussion: (id: string | null) => void
++
++  // 创建讨论弹窗
++  createModalOpen: boolean
++  openCreateModal: () => void
++  closeCreateModal: () => void
++
++  // 删除 & 置顶
++  deleteDiscussion: (id: string) => Promise<void>
++  togglePin: (id: string, pinned: boolean) => Promise<void>
++}
++```
++
++在 [appStore.ts:20-51] store 实现中添加两个 action（`closeCreateModal` 之后）：
++
++```typescript
++deleteDiscussion: async (id) => {
++  await fetch(`/api/discussions/${id}`, { method: 'DELETE' })
++  set((s) => ({
++    discussions: s.discussions.filter(d => d.id !== id),
++    activeDiscussionId: s.activeDiscussionId === id ? null : s.activeDiscussionId,
++  }))
++},
++
++togglePin: async (id, pinned) => {
++  await fetch(`/api/discussions/${id}/pin`, {
++    method: 'PATCH',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify({ pinned }),
++  })
++  // 重新拉取列表以获取正确排序
++  await get().fetchDiscussions()
++},
++```
++
++- [ ] **Step 2: 验证编译**
++
++```bash
++cd client && npx tsc --noEmit
++```
++
++Expected: `appStore.ts` 无错误
++
++- [ ] **Step 3: Commit**
++
++```bash
++git add client/src/stores/appStore.ts
++git commit -m "feat: add deleteDiscussion and togglePin to appStore"
++```
++
++---
++
++### Task 8: Discussion Store — message_token 事件处理
++
++**Files:**
++- Modify: `client/src/stores/discussionStore.ts`
++
++**Interfaces:**
++- Consumes: `MessageTokenEvent`（Task 6）
++- Produces: `appendMessageToken(panelist_id, token, seq)` — 逐 token 追加到 message.content
++
++- [ ] **Step 1: 新增 appendMessageToken action 和 SSE 监听**
++
++在 [discussionStore.ts:5-33] `DiscussionState` interface 中添加：
++
++```typescript
++// 实时更新
++addMessage: (msg: Message) => void
++appendMessageToken: (panelist_id: string, token: string, seq: number) => void
++updatePanelistStatus: (e: PanelistStatusEvent) => void
++```
++
++在 [discussionStore.ts:114-118] `addMessage` 实现之后添加 `appendMessageToken`：
++
++```typescript
++appendMessageToken: (panelist_id, token, seq) =>
++  set((s) => {
++    const idx = s.messages.findIndex(m => m.seq === seq)
++    if (idx >= 0) {
++      // 已有占位消息，追加 token
++      const updated = [...s.messages]
++      updated[idx] = { ...updated[idx], content: updated[idx].content + token }
++      return { messages: updated }
++    }
++    // 尚无占位消息，创建之
++    const placeholder: Message = {
++      id: `streaming-${seq}`,
++      discussion_id: s.discussion?.id ?? '',
++      panelist_id,
++      name: s.panelists.find(p => p.id === panelist_id)?.name ?? '',
++      title: s.panelists.find(p => p.id === panelist_id)?.title ?? '',
++      color: s.panelists.find(p => p.id === panelist_id)?.color ?? '#888888',
++      content: token,
++      type: 'statement',
++      seq,
++      created_at: new Date().toISOString(),
++    }
++    // 按 seq 插入正确位置
++    const inserted = [...s.messages, placeholder].sort((a, b) => a.seq - b.seq)
++    return { messages: inserted }
++  }),
++```
++
++在 [discussionStore.ts:78-101] `connectSSE` 中添加 `message_token` 监听（在 `panelist_status` 监听之后）：
++
++```typescript
++es.addEventListener('message_token', (e) => {
++  const data: { panelist_id: string; token: string; seq: number } = JSON.parse(e.data)
++  get().appendMessageToken(data.panelist_id, data.token, data.seq)
++})
++```
++
++同时修改 `addMessage`，使其用完整 message 替换占位行（处理 transcript_message 在 message_token 之后到达的情况）：
++
++将 [discussionStore.ts:114-118] 的 `addMessage` 修改为：
++
++```typescript
++addMessage: (msg) =>
++  set((s) => {
++    // 替换流式占位行（同一 seq），或去重（同一 id）
++    const idxById = s.messages.findIndex(m => m.id === msg.id)
++    if (idxById >= 0) return s // 已存在，跳过
++    const idxBySeq = s.messages.findIndex(m => m.seq === msg.seq && m.id.startsWith('streaming-'))
++    if (idxBySeq >= 0) {
++      const updated = [...s.messages]
++      updated[idxBySeq] = msg
++      return { messages: updated }
++    }
++    return { messages: [...s.messages, msg].sort((a, b) => a.seq - b.seq) }
++  }),
++```
++
++- [ ] **Step 2: 验证编译**
++
++```bash
++cd client && npx tsc --noEmit
++```
++
++Expected: `discussionStore.ts` 无错误
++
++- [ ] **Step 3: Commit**
++
++```bash
++git add client/src/stores/discussionStore.ts
++git commit -m "feat: add message_token streaming support to discussionStore"
++```
++
++---
++
++### Task 9: DiscussionList — 置顶/删除按钮 + 确认弹窗
++
++**Files:**
++- Modify: `client/src/components/discussion/DiscussionList.tsx`
++- Modify: `client/src/components/layout/Icons.tsx`
++
++**Interfaces:**
++- Consumes: `deleteDiscussion`、`togglePin`（Task 7）
++- Produces: 卡片右下角 PinIcon + DeleteIcon，删除确认 Modal
++
++- [ ] **Step 1: 新增 PinIcon 和 DeleteIcon**
++
++在 [Icons.tsx:35] 文件末尾追加：
++
++```typescript
++export function PinIcon({ filled = false }: { filled?: boolean }) {
++  return (
++    <svg width="16" height="16" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2">
++      <path d="M12 2v20M5 9l7-7 7 7" />
++    </svg>
++  )
++}
++
++export function DeleteIcon() {
++  return (
++    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
++      <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
++      <path d="M10 11v6M14 11v6" />
++    </svg>
++  )
++}
++```
++
++- [ ] **Step 2: 改造 DiscussionList 组件**
++
++完整替换 [DiscussionList.tsx](client/src/components/discussion/DiscussionList.tsx)：
++
++```typescript
++import { useState } from 'react'
++import { useNavigate } from 'react-router-dom'
++import { useAppStore } from '../../stores/appStore'
++import { PlusIcon, PinIcon, DeleteIcon, CloseIcon } from '../layout/Icons'
++import type { DiscussionSummary } from '../../types'
++
++interface Props {
++  onNewDiscussion: () => void
++}
++
++export function DiscussionList({ onNewDiscussion }: Props) {
++  const {
++    discussions, loading, activeDiscussionId,
++    setActiveDiscussion, deleteDiscussion, togglePin,
++  } = useAppStore()
++  const navigate = useNavigate()
++  const [deleteTarget, setDeleteTarget] = useState<DiscussionSummary | null>(null)
++
++  const handleSelect = (d: DiscussionSummary) => {
++    setActiveDiscussion(d.id)
++    navigate(`/discussion/${d.id}`)
++  }
++
++  const handleDelete = async () => {
++    if (!deleteTarget) return
++    await deleteDiscussion(deleteTarget.id)
++    setDeleteTarget(null)
++  }
++
++  const statusLabel = (s: string) => {
++    switch (s) {
++      case 'live': return '● 进行中'
++      case 'pending': return '○ 待开始'
++      case 'ended': return '◎ 已结束'
++    }
++  }
++
++  const statusClass = (s: string) => {
++    switch (s) {
++      case 'live': return 'text-status-green'
++      case 'pending': return 'text-status-amber'
++      case 'ended': return 'text-status-gray'
++    }
++  }
++
++  return (
++    <div className="flex flex-col h-full">
++      {/* 头部 */}
++      <div className="p-4 border-b border-border-glow flex items-center justify-between">
++        <h2 className="text-lg font-semibold text-text-primary">讨论列表</h2>
++        <button
++          onClick={onNewDiscussion}
++          className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-accent-cyan cursor-pointer"
++          title="发起新讨论"
++        >
++          <PlusIcon />
++        </button>
++      </div>
++
++      {/* 列表 */}
++      <div className="flex-1 overflow-y-auto p-2 space-y-2">
++        {loading && discussions.length === 0 && (
++          <p className="text-text-dim text-sm text-center py-8">加载中...</p>
++        )}
++
++        {!loading && discussions.length === 0 && (
++          <p className="text-text-dim text-sm text-center py-8">
++            暂无讨论，点击 + 发起
++          </p>
++        )}
++
++        {discussions.map((d) => (
++          <div
++            key={d.id}
++            className={`relative group w-full text-left p-3 rounded-xl border transition-all
++              ${d.id === activeDiscussionId
++                ? 'border-accent-cyan bg-accent-cyan/10 shadow-[0_0_12px_rgba(0,229,255,0.15)]'
++                : 'border-white/5 hover:border-white/15 bg-white/[0.02]'
++              }`}
++          >
++            {/* 主点击区域 */}
++            <button
++              onClick={() => handleSelect(d)}
++              className="w-full text-left pr-16 cursor-pointer"
++            >
++              <div className="flex items-center gap-1.5">
++                {d.pinned_at && (
++                  <span className="text-accent-cyan shrink-0">
++                    <PinIcon filled />
++                  </span>
++                )}
++                <p className="text-sm font-medium text-text-primary truncate">{d.topic}</p>
++              </div>
++              <div className="flex items-center gap-3 mt-1.5 text-xs text-text-dim">
++                <span className={statusClass(d.status)}>{statusLabel(d.status)}</span>
++                <span>{d.panelist_count} 位嘉宾</span>
++                <span>{d.message_count} 条发言</span>
++              </div>
++            </button>
++
++            {/* 右下角操作按钮 */}
++            <div className="absolute bottom-2 right-2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
++              <button
++                onClick={(e) => { e.stopPropagation(); togglePin(d.id, !d.pinned_at) }}
++                className={`p-1.5 rounded-md transition-colors cursor-pointer
++                  ${d.pinned_at
++                    ? 'text-accent-cyan bg-accent-cyan/10'
++                    : 'text-text-dim hover:text-text-primary hover:bg-white/10'
++                  }`}
++                title={d.pinned_at ? '取消置顶' : '置顶'}
++              >
++                <PinIcon filled={!!d.pinned_at} />
++              </button>
++              <button
++                onClick={(e) => { e.stopPropagation(); setDeleteTarget(d) }}
++                className="p-1.5 rounded-md text-text-dim hover:text-red-400 hover:bg-red-400/10 transition-colors cursor-pointer"
++                title="删除讨论"
++              >
++                <DeleteIcon />
++              </button>
++            </div>
++          </div>
++        ))}
++      </div>
++
++      {/* 删除确认弹窗 */}
++      {deleteTarget && (
++        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
++          <div className="bg-surface-dark border border-border-glow rounded-2xl p-6 w-80 shadow-2xl">
++            <div className="flex items-center justify-between mb-4">
++              <h3 className="text-lg font-semibold text-text-primary">确认删除</h3>
++              <button
++                onClick={() => setDeleteTarget(null)}
++                className="p-1 rounded-md hover:bg-white/10 text-text-dim hover:text-text-primary transition-colors cursor-pointer"
++              >
++                <CloseIcon />
++              </button>
++            </div>
++            <p className="text-sm text-text-dim mb-2">
++              确定要删除以下讨论吗？此操作不可撤销。
++            </p>
++            <p className="text-sm font-medium text-text-primary mb-6 truncate">
++              "{deleteTarget.topic}"
++            </p>
++            <div className="flex gap-3">
++              <button
++                onClick={() => setDeleteTarget(null)}
++                className="flex-1 py-2 px-4 rounded-xl border border-white/10 text-text-dim hover:text-text-primary hover:bg-white/5 transition-colors cursor-pointer text-sm"
++              >
++                取消
++              </button>
++              <button
++                onClick={handleDelete}
++                className="flex-1 py-2 px-4 rounded-xl bg-red-500/20 border border-red-500/30 text-red-400 hover:bg-red-500/30 transition-colors cursor-pointer text-sm font-medium"
++              >
++                确认删除
++              </button>
++            </div>
++          </div>
++        </div>
++      )}
++    </div>
++  )
++}
++```
++
++- [ ] **Step 2: 验证编译**
++
++```bash
++cd client && npx tsc --noEmit
++```
++
++Expected: 无错误
++
++- [ ] **Step 3: Commit**
++
++```bash
++git add client/src/components/discussion/DiscussionList.tsx client/src/components/layout/Icons.tsx
++git commit -m "feat: add pin and delete buttons to discussion list cards"
++```
++
++---
++
++### Task 10: 端到端验证
++
++- [ ] **Step 1: 启动后端并验证 API**
++
++```bash
++cd server && npx tsx src/index.ts
++```
++
++测试：
++```bash
++# 删除
++curl -X DELETE http://localhost:3001/api/discussions/<id>
++# 置顶
++curl -X PATCH http://localhost:3001/api/discussions/<id>/pin -H 'Content-Type: application/json' -d '{"pinned":true}'
++# 取消置顶
++curl -X PATCH http://localhost:3001/api/discussions/<id>/pin -H 'Content-Type: application/json' -d '{"pinned":false}'
++# 列表排序
++curl http://localhost:3001/api/discussions
++```
++
++- [ ] **Step 2: 启动前端并验证 UI**
++
++```bash
++cd client && npx vite
++```
++
++验证清单：
++- [ ] 卡片 hover 时右下角出现置顶和删除按钮
++- [ ] 点击置顶 → 讨论移到列表顶部 → 置顶图标高亮
++- [ ] 点击删除 → 弹出确认对话框 → 显示讨论主题名
++- [ ] 确认删除 → 讨论从列表移除
++- [ ] 取消删除 → 对话框关闭
++- [ ] 删除活跃讨论 → 自动取消选中状态
++
++- [ ] **Step 3: 验证流式输出**
++
++进入一个 live 讨论，观察：
++- [ ] 发言文本逐 token 出现（非一次性显示）
++- [ ] 输出连贯，无截断或乱序
++- [ ] 发言完成后正常进入下一轮
++
++- [ ] **Step 4: Commit（如有修复）**
++
++```bash
++git add -A
++git commit -m "fix: E2E verification fixes"
++```
+diff --git a/docs/superpowers/specs/2026-06-26-delete-pin-streaming-design.md b/docs/superpowers/specs/2026-06-26-delete-pin-streaming-design.md
+new file mode 100644
+index 0000000..27a2d0a
+--- /dev/null
++++ b/docs/superpowers/specs/2026-06-26-delete-pin-streaming-design.md
+@@ -0,0 +1,177 @@
++# Design Spec: 讨论删除/置顶 + 专家流式输出
++
++**日期:** 2026-06-26  
++**状态:** 已确认
++
++---
++
++## 概述
++
++两个独立功能：
++1. 讨论列表增加删除和置顶（允许多条置顶）
++2. 专家发言改为流式输出（token-by-token）
++
++---
++
++## 一、数据库变更
++
++### `discussions` 表新增列
++
++```sql
++ALTER TABLE discussions ADD COLUMN pinned_at TIMESTAMP;
++-- NULL = 未置顶，非 NULL = 置顶时间
++```
++
++同步更新 `server/migrations/init.sql`。
++
++---
++
++## 二、后端 API
++
++### 2.1 新增端点
++
++#### `DELETE /api/discussions/:id`
++
++级联删除讨论及其关联数据：
++- panelists
++- messages  
++- consensus_points
++- divergence_points
++- panelist_status_logs
++
++返回：`200 { success: true }`，不存在返回 `404`。
++
++#### `PATCH /api/discussions/:id/pin`
++
++请求体：`{ pinned: boolean }`
++- `true` → 设 `pinned_at = datetime('now')`
++- `false` → 设 `pinned_at = NULL`
++
++返回：更新后的 discussion 对象。
++
++### 2.2 修改端点
++
++#### `GET /api/discussions` — 排序变更
++
++```sql
++ORDER BY pinned_at IS NOT NULL DESC, pinned_at DESC, created_at DESC
++```
++
++置顶的在前（按置顶时间倒序），未置顶的在后（按创建时间倒序）。
++
++### 2.3 流式输出改造
++
++**核心思路：** 将当前 `decideNextSpeaker()` 拆为两步 —— 调度决策（非流式）+ 内容生成（流式）。
++
++#### `server/src/services/llm.ts` — 新增
++
++```typescript
++async function* streamChat(messages: ChatMessage[]): AsyncGenerator<string>
++```
++
++调用 DeepSeek API (`stream: true`)，yield 每个 content delta token。
++
++#### `server/src/services/discussion.ts` — 修改
++
++- `decideNextSpeaker()` — prompt 改为只返回 `{ panelist_id, type }`，不含 content
++- 新增 `generateSpeechStream()` — 接收讨论上下文 + panelist 信息，调用 `streamChat()`，yield token
++
++#### SSE 循环 (`GET /api/discussions/:id/stream`) — 改造
++
++```
++decideNextSpeaker()                          → { panelist_id, type }
++  ↓
++写入占位 message 行（content = ''）
++  ↓
++发送 panelist_status 事件（status: 'speaking'）
++  ↓
++for await (token of generateSpeechStream()):
++  发送 message_token 事件 { panelist_id, token, seq }
++  ↓
++更新 message.content = 完整文本
++  ↓
++发送 transcript_message 事件（完整 message）
++  ↓
++consensus/divergence 提取逻辑不变
++```
++
++#### 新增 SSE 事件类型：`message_token`
++
++```json
++{
++  "panelist_id": "uuid",
++  "token": "这是",
++  "seq": 3
++}
++```
++
++#### `POST /api/discussions/:id/next-step` — 同步适配
++
++同样拆为两步，但 `generateSpeechStream()` 的结果在服务端收集完毕后再返回完整 message（REST 响应不支持流式）。
++
++---
++
++## 三、前端
++
++### 3.1 类型定义 (`client/src/types/index.ts`)
++
++新增：
++```typescript
++interface MessageTokenEvent {
++  panelist_id: string;
++  token: string;
++  seq: number;
++}
++```
++
++### 3.2 `appStore.ts` — 新增 action
++
++- `deleteDiscussion(id)` — `DELETE /api/discussions/:id` → 从 discussions 移除 → 若 `activeDiscussionId === id` 则置 null
++- `togglePin(id, pinned)` — `PATCH /api/discussions/:id/pin` → 刷新列表
++- `fetchDiscussions()` — 无变化，后端已排序
++
++### 3.3 `discussionStore.ts` — 流式接收
++
++新增 `message_token` 事件处理：
++- 收 token → 若 messages 中已有该 seq 的占位 message，追加 token 到其 content；若无，创建占位 message（content 初始为该 token）
++- `transcript_message` 事件 — 使用完整 content 替换对应 seq 的 message（最终一致性保证）
++
++新增 action：
++- `appendMessageToken(panelist_id, token, seq)` — 逐 token 追加
++
++### 3.4 `DiscussionList.tsx` — 卡片按钮
++
++每张卡片右下角增加：
++- **置顶按钮（📌）** — 已置顶时图标实心高亮，点击切换
++- **删除按钮（🗑）** — hover 时红色，点击弹出确认对话框
++
++确认对话框：标题"确认删除"，显示讨论主题名，确认/取消两个按钮，确认后执行删除。
++
++### 3.5 `TranscriptView.tsx`
++
++无需改动。Zustand state 更新驱动重渲染，文本自然逐 token 增长，现有 auto-scroll 自动跟随。
++
++---
++
++## 四、改动文件清单
++
++| 文件 | 改动类型 |
++|------|----------|
++| `server/migrations/init.sql` | 新增 pinned_at 列 |
++| `server/src/services/llm.ts` | 新增 `streamChat()` 方法 |
++| `server/src/services/discussion.ts` | 拆分 `decideNextSpeaker()` + 新增 `generateSpeechStream()` |
++| `server/src/routes/discussions.ts` | 新增 DELETE/PATCH 端点 + SSE 循环改造 + 排序修改 |
++| `client/src/types/index.ts` | 新增 `MessageTokenEvent` |
++| `client/src/stores/appStore.ts` | 新增 `deleteDiscussion`、`togglePin` |
++| `client/src/stores/discussionStore.ts` | 新增 `message_token` 监听 + `appendMessageToken` |
++| `client/src/components/discussion/DiscussionList.tsx` | 新增置顶/删除按钮 + 确认对话框 |
++
++---
++
++## 五、边界情况
++
++- 删除正在 SSE 连接中的讨论：断开 SSE → 删除数据 → 导航回首页
++- 置顶已置顶的讨论：取消置顶（toggle 行为）
++- 流式生成中途断连：`req.on('close')` 触发 `aborted = true`，停止生成
++- 流式 token 到达但占位 message 还未创建：前端创建占位 message
++- `next-step` REST 端点：收集全部 token 后返回完整 message（无流式）
+diff --git a/server/migrations/init.sql b/server/migrations/init.sql
+index 31fd891..d31a97b 100644
+--- a/server/migrations/init.sql
++++ b/server/migrations/init.sql
+@@ -54,10 +54,13 @@ CREATE TABLE IF NOT EXISTS panelist_status_logs (
+     focus TEXT,
+     recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+ );
+ 
+ -- 索引
+ CREATE INDEX IF NOT EXISTS idx_panelists_discussion ON panelists(discussion_id);
+ CREATE INDEX IF NOT EXISTS idx_messages_discussion ON messages(discussion_id, seq);
+ CREATE INDEX IF NOT EXISTS idx_consensus_discussion ON consensus_points(discussion_id);
+ CREATE INDEX IF NOT EXISTS idx_divergence_discussion ON divergence_points(discussion_id);
+ CREATE INDEX IF NOT EXISTS idx_status_logs_panelist ON panelist_status_logs(panelist_id, recorded_at);
++
++-- v2: 讨论置顶
++ALTER TABLE discussions ADD COLUMN pinned_at TIMESTAMP;
+diff --git a/server/src/routes/discussions.ts b/server/src/routes/discussions.ts
+index fe0e9fd..bce038b 100644
+--- a/server/src/routes/discussions.ts
++++ b/server/src/routes/discussions.ts
+@@ -1,16 +1,16 @@
+ import { Router, Request, Response } from 'express'
+ import { v4 as uuidv4 } from 'uuid'
+ import { getDb, queryAll, queryOne, execute } from '../db/index.js'
+ import { createLLMClient } from '../services/llm.js'
+ import { generatePanelists } from '../services/panelist.js'
+-import { decideNextSpeaker } from '../services/discussion.js'
++import { decideNextSpeaker, generateSpeechStream, generateSpeechContent } from '../services/discussion.js'
+ import { extractConsensus } from '../services/consensus.js'
+ import type { DiscussionRow, PanelistRow, MessageRow, ConsensusRow, DivergenceRow } from '../types/index.js'
+ 
+ const router = Router()
+ 
+ // 工具函数：将 MessageRow 与 PanelistRow 合并，补全 name/title/color
+ function enrichMessages(
+   messages: MessageRow[],
+   panelists: PanelistRow[]
+ ): (MessageRow & { name: string; title: string; color: string })[] {
+@@ -23,21 +23,21 @@ function enrichMessages(
+     name: map[m.panelist_id]?.name ?? '未知',
+     title: map[m.panelist_id]?.title ?? '',
+     color: map[m.panelist_id]?.color ?? '#888888',
+   }))
+ }
+ 
+ // GET /api/discussions — 获取讨论列表
+ router.get('/', async (_req: Request, res: Response) => {
+   try {
+     const db = await getDb()
+-    const discussions = queryAll(db, 'SELECT * FROM discussions ORDER BY created_at DESC') as DiscussionRow[]
++    const discussions = queryAll(db, 'SELECT * FROM discussions ORDER BY pinned_at IS NOT NULL DESC, pinned_at DESC, created_at DESC') as DiscussionRow[]
+ 
+     const enriched = discussions.map(d => {
+       const panelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [d.id]) as PanelistRow[]
+       return { ...d, panelists }
+     })
+ 
+     res.json(enriched)
+   } catch (e) {
+     console.error('[GET /api/discussions] 错误:', e)
+     res.status(500).json({ error: '获取讨论列表失败' })
+@@ -112,20 +112,67 @@ router.get('/:id', async (req: Request, res: Response) => {
+ 
+     const enrichedMessages = enrichMessages(messages, panelists)
+     console.log('[GET /:id] enriched msg sample:', enrichedMessages[0]?.name)
+     res.json({ ...discussion, panelists, messages: enrichedMessages, consensus, divergence })
+   } catch (e) {
+     console.error('[GET /api/discussions/:id] 错误:', e)
+     res.status(500).json({ error: '获取讨论详情失败' })
+   }
+ })
+ 
++// DELETE /api/discussions/:id — 删除讨论
++router.delete('/:id', async (req: Request, res: Response) => {
++  try {
++    const db = await getDb()
++    const discussion = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [req.params.id]) as DiscussionRow | undefined
++    if (!discussion) {
++      res.status(404).json({ error: '讨论不存在' })
++      return
++    }
++
++    // FK ON DELETE CASCADE 自动删除关联数据
++    execute(db, 'DELETE FROM discussions WHERE id = ?', [req.params.id])
++
++    console.log('[DELETE /api/discussions/:id] 讨论已删除, id:', req.params.id)
++    res.json({ success: true })
++  } catch (e) {
++    console.error('[DELETE /api/discussions/:id] 错误:', e)
++    res.status(500).json({ error: '删除讨论失败' })
++  }
++})
++
++// PATCH /api/discussions/:id/pin — 置顶/取消置顶
++router.patch('/:id/pin', async (req: Request, res: Response) => {
++  try {
++    const db = await getDb()
++    const discussion = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [req.params.id]) as DiscussionRow | undefined
++    if (!discussion) {
++      res.status(404).json({ error: '讨论不存在' })
++      return
++    }
++
++    const { pinned } = req.body
++    if (pinned) {
++      execute(db, "UPDATE discussions SET pinned_at = datetime('now') WHERE id = ?", [req.params.id])
++    } else {
++      execute(db, 'UPDATE discussions SET pinned_at = NULL WHERE id = ?', [req.params.id])
++    }
++
++    const updated = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [req.params.id]) as DiscussionRow
++    console.log('[PATCH /api/discussions/:id/pin] 置顶状态更新, id:', req.params.id, 'pinned:', pinned)
++    res.json(updated)
++  } catch (e) {
++    console.error('[PATCH /api/discussions/:id/pin] 错误:', e)
++    res.status(500).json({ error: '置顶操作失败' })
++  }
++})
++
+ // POST /api/discussions/:id/confirm — 确认并开始讨论（前端调用）
+ router.post('/:id/confirm', async (req: Request, res: Response) => {
+   try {
+     const db = await getDb()
+     const discussion = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [req.params.id]) as DiscussionRow | undefined
+     if (!discussion) {
+       res.status(404).json({ error: '讨论不存在' })
+       return
+     }
+ 
+@@ -143,38 +190,55 @@ router.post('/:id/confirm', async (req: Request, res: Response) => {
+     const llm = createLLMClient(apiKey)
+ 
+     execute(db, 'UPDATE discussions SET status = ? WHERE id = ?', ['live', req.params.id])
+ 
+     const panelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
+     const messages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [req.params.id]) as MessageRow[]
+ 
+     const decision = await decideNextSpeaker(
+       {
+         topic: discussion.topic,
+-        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, status: p.status })),
++        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
+         messages: messages.map(m => ({ panelist_id: m.panelist_id, name: '', content: m.content, type: m.type })),
+       },
+       llm
+     )
+ 
+     const msgId = uuidv4()
+     const nextSeq = messages.length + 1
+     execute(db,
+       'INSERT INTO messages (id, discussion_id, panelist_id, content, type, seq) VALUES (?, ?, ?, ?, ?, ?)',
+-      [msgId, req.params.id, decision.panelist_id, decision.content, decision.type, nextSeq]
++      [msgId, req.params.id, decision.panelist_id, '', decision.type, nextSeq]
+     )
+ 
+     execute(db, 'UPDATE panelists SET status = ? WHERE id = ?', ['speaking', decision.panelist_id])
+     execute(db, 'INSERT INTO panelist_status_logs (id, panelist_id, status, focus) VALUES (?, ?, ?, ?)',
+       [uuidv4(), decision.panelist_id, 'speaking', null]
+     )
+ 
++    // Generate speech content (non-streaming for REST)
++    const panelistNameMap: Record<string, string> = {}
++    for (const p of panelists) {
++      panelistNameMap[p.id] = p.name
++    }
++    const speechContent = await generateSpeechContent(
++      {
++        topic: discussion.topic,
++        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
++        messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
++      },
++      decision,
++      llm
++    )
++
++    execute(db, 'UPDATE messages SET content = ? WHERE id = ?', [speechContent, msgId])
++
+     const updatedDiscussion = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [req.params.id]) as DiscussionRow
+     const updatedPanelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
+     const updatedMessages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [req.params.id]) as MessageRow[]
+ 
+     console.log('[POST /api/discussions/:id/confirm] 讨论确认并开始, id:', req.params.id)
+     res.json({ ...updatedDiscussion, panelists: updatedPanelists, messages: enrichMessages(updatedMessages, updatedPanelists), consensus: [], divergence: [] })
+   } catch (e: any) {
+     console.error('[POST /api/discussions/:id/confirm] 错误:', e)
+     const status = e.statusCode || 500
+     res.status(status).json({ error: e.message || '确认讨论失败' })
+@@ -205,38 +269,55 @@ router.post('/:id/start', async (req: Request, res: Response) => {
+     const llm = createLLMClient(apiKey)
+ 
+     execute(db, 'UPDATE discussions SET status = ? WHERE id = ?', ['live', req.params.id])
+ 
+     const panelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
+     const messages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [req.params.id]) as MessageRow[]
+ 
+     const decision = await decideNextSpeaker(
+       {
+         topic: discussion.topic,
+-        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, status: p.status })),
++        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
+         messages: messages.map(m => ({ panelist_id: m.panelist_id, name: '', content: m.content, type: m.type })),
+       },
+       llm
+     )
+ 
+     const msgId = uuidv4()
+     const nextSeq = messages.length + 1
+     execute(db,
+       'INSERT INTO messages (id, discussion_id, panelist_id, content, type, seq) VALUES (?, ?, ?, ?, ?, ?)',
+-      [msgId, req.params.id, decision.panelist_id, decision.content, decision.type, nextSeq]
++      [msgId, req.params.id, decision.panelist_id, '', decision.type, nextSeq]
+     )
+ 
+     execute(db, 'UPDATE panelists SET status = ? WHERE id = ?', ['speaking', decision.panelist_id])
+     execute(db, 'INSERT INTO panelist_status_logs (id, panelist_id, status, focus) VALUES (?, ?, ?, ?)',
+       [uuidv4(), decision.panelist_id, 'speaking', null]
+     )
+ 
++    // Generate speech content (non-streaming for REST)
++    const panelistNameMap: Record<string, string> = {}
++    for (const p of panelists) {
++      panelistNameMap[p.id] = p.name
++    }
++    const speechContent = await generateSpeechContent(
++      {
++        topic: discussion.topic,
++        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
++        messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
++      },
++      decision,
++      llm
++    )
++
++    execute(db, 'UPDATE messages SET content = ? WHERE id = ?', [speechContent, msgId])
++
+     const updatedDiscussion = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [req.params.id]) as DiscussionRow
+     const updatedPanelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
+     const updatedMessages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [req.params.id]) as MessageRow[]
+ 
+     console.log('[POST /api/discussions/:id/start] 讨论开始, id:', req.params.id)
+     res.json({ ...updatedDiscussion, panelists: updatedPanelists, messages: enrichMessages(updatedMessages, updatedPanelists), consensus: [], divergence: [] })
+   } catch (e: any) {
+     console.error('[POST /api/discussions/:id/start] 错误:', e)
+     const status = e.statusCode || 500
+     res.status(status).json({ error: e.message || '开始讨论失败' })
+@@ -270,38 +351,51 @@ router.post('/:id/next-step', async (req: Request, res: Response) => {
+     const messages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [req.params.id]) as MessageRow[]
+ 
+     const panelistNameMap: Record<string, string> = {}
+     for (const p of panelists) {
+       panelistNameMap[p.id] = p.name
+     }
+ 
+     const decision = await decideNextSpeaker(
+       {
+         topic: discussion.topic,
+-        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, status: p.status })),
++        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
+         messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
+       },
+       llm
+     )
+ 
+     const msgId = uuidv4()
+     const nextSeq = messages.length + 1
+     execute(db,
+       'INSERT INTO messages (id, discussion_id, panelist_id, content, type, seq) VALUES (?, ?, ?, ?, ?, ?)',
+-      [msgId, req.params.id, decision.panelist_id, decision.content, decision.type, nextSeq]
++      [msgId, req.params.id, decision.panelist_id, '', decision.type, nextSeq]
+     )
+ 
+     execute(db, 'UPDATE panelists SET status = ? WHERE id = ?', ['speaking', decision.panelist_id])
+     execute(db, 'INSERT INTO panelist_status_logs (id, panelist_id, status, focus) VALUES (?, ?, ?, ?)',
+       [uuidv4(), decision.panelist_id, 'speaking', null]
+     )
+ 
++    // Generate speech content (non-streaming for REST)
++    const speechContent = await generateSpeechContent(
++      {
++        topic: discussion.topic,
++        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
++        messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
++      },
++      decision,
++      llm
++    )
++
++    execute(db, 'UPDATE messages SET content = ? WHERE id = ?', [speechContent, msgId])
++
+     let consensusResult = { consensus: [] as { content: string; confidence: number }[], divergence: [] as { content: string; perspectives: string[] }[] }
+     if (nextSeq >= 4) {
+       const existingConsensus = queryAll(db, 'SELECT * FROM consensus_points WHERE discussion_id = ?', [req.params.id]) as ConsensusRow[]
+       const existingDivergence = queryAll(db, 'SELECT * FROM divergence_points WHERE discussion_id = ?', [req.params.id]) as DivergenceRow[]
+       const recentMsgs = messages.slice(-5).map(m => ({
+         panelist_id: m.panelist_id,
+         name: panelistNameMap[m.panelist_id] || '',
+         content: m.content,
+       }))
+ 
+@@ -434,72 +528,110 @@ router.get('/:id/stream', async (req: Request, res: Response) => {
+ 
+       // 构建 name map 用于 context
+       const nameMap: Record<string, string> = {}
+       for (const p of currentPanelists) {
+         nameMap[p.id] = p.name
+       }
+ 
+       const decision = await decideNextSpeaker(
+         {
+           topic: discussion.topic,
+-          panelists: currentPanelists.map(p => ({ id: p.id, name: p.name, role: p.role, status: p.status })),
++          panelists: currentPanelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
+           messages: currentMessages.map(m => ({
+             panelist_id: m.panelist_id,
+             name: nameMap[m.panelist_id] || '',
+             content: m.content,
+             type: m.type,
+           })),
+         },
+         llm
+       )
+ 
+       if (aborted) break
+ 
+-      // 持久化消息
++      // Insert placeholder message
+       const msgId = uuidv4()
+       const nextSeq = currentMessages.length + 1
+       execute(db,
+         'INSERT INTO messages (id, discussion_id, panelist_id, content, type, seq) VALUES (?, ?, ?, ?, ?, ?)',
+-        [msgId, req.params.id, decision.panelist_id, decision.content, decision.type, nextSeq]
++        [msgId, req.params.id, decision.panelist_id, '', decision.type, nextSeq]
+       )
+ 
+-      // 更新 panelist 状态：所有 speaking 的切回 standby，新发言人设为 speaking
++      // Update panelist status
+       execute(db, 'UPDATE panelists SET status = ? WHERE discussion_id = ? AND status = ?', ['standby', req.params.id, 'speaking'])
+       execute(db, 'UPDATE panelists SET status = ? WHERE id = ?', ['speaking', decision.panelist_id])
+       execute(db, 'INSERT INTO panelist_status_logs (id, panelist_id, status, focus) VALUES (?, ?, ?, ?)',
+         [uuidv4(), decision.panelist_id, 'speaking', null]
+       )
+ 
+-      // 发送 transcript_message 事件
+-      const speaker = currentPanelists.find(p => p.id === decision.panelist_id)
++      // Send panelist_status events
++      const updatedPanelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
++      for (const p of updatedPanelists) {
++        sendEvent('panelist_status', {
++          panelist_id: p.id,
++          status: p.status,
++          focus: p.focus,
++        })
++      }
++
++      // Stream speech content token by token
++      let fullContent = ''
++      try {
++        for await (const token of generateSpeechStream(
++          {
++            topic: discussion.topic,
++            panelists: currentPanelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
++            messages: currentMessages.map(m => ({
++              panelist_id: m.panelist_id,
++              name: nameMap[m.panelist_id] || '',
++              content: m.content,
++              type: m.type,
++            })),
++          },
++          decision,
++          llm
++        )) {
++          if (aborted) break
++          fullContent += token
++          sendEvent('message_token', {
++            panelist_id: decision.panelist_id,
++            token,
++            seq: nextSeq,
++          })
++        }
++      } catch (streamErr) {
++        console.error('[SSE] 流式生成失败:', streamErr)
++        if (!aborted && fullContent.length === 0) {
++          fullContent = '（发言生成失败）'
++        }
++      }
++
++      if (aborted) break
++
++      // Persist complete content
++      execute(db, 'UPDATE messages SET content = ? WHERE id = ?', [fullContent, msgId])
++
++      // Send complete transcript_message
++      const speaker = updatedPanelists.find(p => p.id === decision.panelist_id)
+       sendEvent('transcript_message', {
+         id: msgId,
+         discussion_id: req.params.id,
+         panelist_id: decision.panelist_id,
+         name: speaker?.name ?? nameMap[decision.panelist_id] ?? '未知',
+         title: speaker?.title ?? '',
+         color: speaker?.color ?? '#888888',
+-        content: decision.content,
++        content: fullContent,
+         type: decision.type,
+         seq: nextSeq,
+         created_at: new Date().toISOString(),
+       })
+ 
+-      // 发送 panelist_status 事件
+-      for (const p of currentPanelists) {
+-        sendEvent('panelist_status', {
+-          panelist_id: p.id,
+-          status: p.id === decision.panelist_id ? 'speaking' as const : (p.status === 'speaking' ? 'standby' as const : p.status),
+-          focus: null as string | null,
+-        })
+-      }
+-
+       // 每隔约 3 条新消息提取共识/分歧（首次在 ≥4 条时）
+       const totalMsgs = currentMessages.length + 1
+       if (totalMsgs >= 4 && totalMsgs % 3 === 1) {
+         const existingConsensus = queryAll(db, 'SELECT * FROM consensus_points WHERE discussion_id = ?', [req.params.id]) as ConsensusRow[]
+         const existingDivergence = queryAll(db, 'SELECT * FROM divergence_points WHERE discussion_id = ?', [req.params.id]) as DivergenceRow[]
+         const recentMsgs = currentMessages.slice(-5).map(m => ({
+           panelist_id: m.panelist_id,
+           name: nameMap[m.panelist_id] || '',
+           content: m.content,
+         }))
+@@ -539,21 +671,21 @@ router.get('/:id/stream', async (req: Request, res: Response) => {
+           console.error('[SSE] 共识提取失败:', consensusErr)
+         }
+       }
+ 
+       // 结束检测
+       if (decision.type === 'closing' || totalMsgs >= 15) {
+         execute(db, 'UPDATE discussions SET status = ? WHERE id = ?', ['ended', req.params.id])
+         for (const p of currentPanelists) {
+           execute(db, 'UPDATE panelists SET status = ? WHERE id = ?', ['standby', p.id])
+         }
+-        sendEvent('discussion_end', { summary: decision.type === 'closing' ? decision.content : '讨论已到达最大轮次' })
++        sendEvent('discussion_end', { summary: decision.type === 'closing' ? fullContent : '讨论已到达最大轮次' })
+         console.log('[SSE] 讨论结束, id:', req.params.id)
+         break
+       }
+ 
+       // 轮次间隔（模拟真实讨论节奏）
+       await delay(3000)
+     }
+   } catch (e: any) {
+     console.error('[SSE] 讨论流错误:', e)
+     if (!aborted) {
+diff --git a/server/src/services/discussion.ts b/server/src/services/discussion.ts
+index 52c8a5d..7e9bc67 100644
+--- a/server/src/services/discussion.ts
++++ b/server/src/services/discussion.ts
+@@ -2,37 +2,36 @@ import { z } from 'zod'
+ import type { LLMClient, SchedulingContext, MessageType } from '../types/index.js'
+ import { ValidationError, LLMParseError } from '../utils/errors.js'
+ 
+ const VALID_MESSAGE_TYPES: MessageType[] = [
+   'opening', 'statement', 'rebuttal', 'supplement', 'closing',
+ ]
+ 
+ const SchedulingResponseSchema = z.object({
+   panelist_id: z.string().min(1),
+   type: z.string(),
+-  content: z.string().min(1),
+ })
+ 
+ function buildSystemPrompt(): string {
+   return `你是一个圆桌讨论的调度员。根据当前讨论状态，决定下一位发言的嘉宾。
+ 
+ 规则：
+ 1. 分析所有嘉宾的角色和当前讨论进展，决定谁最应该下一个发言
+ 2. 主持人(host)负责开场(opening)、串场追问、收尾总结(closing)
+ 3. 专家(expert)进行观点陈述(statement)、补充(supplement)、反驳(rebuttal)
+ 4. 非轮询制：哪位专家观点最需要被听到，就安排谁发言
+ 5. 鼓励观点碰撞：如果最近发言存在可争议的点，优先安排持不同立场的专家反驳
+ 6. 每位发言控制在 1-2 句话（约 50-150 字）
+ 7. 如果讨论已经充分（通常 10-15 轮发言后），主持人可以做总结(closing)并结束讨论
+ 
+-严格以 JSON 格式返回：
+-{"panelist_id": "嘉宾ID", "type": "opening|statement|rebuttal|supplement|closing", "content": "发言内容"}`
++严格以 JSON 格式返回（只做调度，不写发言内容）：
++{"panelist_id": "嘉宾ID", "type": "opening|statement|rebuttal|supplement|closing"}`
+ }
+ 
+ function buildUserPrompt(ctx: SchedulingContext): string {
+   const panelistList = ctx.panelists
+     .map(p => `- id: ${p.id}, 姓名: ${p.name}, 角色: ${p.role}`)
+     .join('\n')
+ 
+   const history =
+     ctx.messages.length > 0
+       ? ctx.messages.map(m => `[${m.name}](${m.type}): ${m.content}`).join('\n')
+@@ -60,70 +59,145 @@ function extractJson(response: string): string {
+   const jsonMatch = response.match(/\{[\s\S]*\}/)
+   if (!jsonMatch) {
+     throw new LLMParseError('LLM 返回中未找到 JSON 结构')
+   }
+   return jsonMatch[0]
+ }
+ 
+ function parseResponse(
+   response: string,
+   ctx: SchedulingContext
+-): { panelist_id: string; type: MessageType; content: string } {
++): { panelist_id: string; type: MessageType } {
+   let data: unknown
+   try {
+     data = JSON.parse(extractJson(response))
+   } catch {
+     throw new LLMParseError('LLM 返回的 JSON 解析失败')
+   }
+ 
+   const result = SchedulingResponseSchema.safeParse(data)
+   if (!result.success) {
+     const issues = result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')
+     throw new LLMParseError(`发言调度返回格式不符合预期: ${issues}`)
+   }
+ 
+-  const { panelist_id, type, content } = result.data
++  const { panelist_id, type } = result.data
+ 
+   const validIds = ctx.panelists.map(p => p.id)
+   if (!validIds.includes(panelist_id)) {
+     throw new LLMParseError(`LLM 返回了不存在的嘉宾 ID: ${panelist_id}`)
+   }
+ 
+   return {
+     panelist_id,
+     type: normalizeMessageType(type),
+-    content,
+   }
+ }
+ 
+ function checkConsecutiveRule(ctx: SchedulingContext, proposedPanelistId: string): void {
+   if (ctx.messages.length < 2) return
+ 
+   const lastTwo = ctx.messages.slice(-2)
+   const samePanelist = lastTwo.every(m => m.panelist_id === proposedPanelistId)
+   if (samePanelist) {
+     throw new ValidationError('同一嘉宾不能连续发言超过 2 次')
+   }
+ }
+ 
+ export async function decideNextSpeaker(
+   ctx: SchedulingContext,
+   llm: LLMClient
+-): Promise<{ panelist_id: string; type: MessageType; content: string }> {
++): Promise<{ panelist_id: string; type: MessageType }> {
+   if (ctx.panelists.length === 0) {
+     throw new ValidationError('嘉宾列表不能为空')
+   }
+ 
+   console.log('[discussion] 开始发言调度, topic:', ctx.topic, 'panelist_count:', ctx.panelists.length, 'msg_count:', ctx.messages.length)
+ 
+   const messages = [
+     { role: 'system', content: buildSystemPrompt() },
+     { role: 'user', content: buildUserPrompt(ctx) },
+   ]
+ 
+   const response = await llm.chat(messages)
+   const result = parseResponse(response, ctx)
+   checkConsecutiveRule(ctx, result.panelist_id)
+ 
+   console.log('[discussion] 发言调度完成, next:', result.panelist_id, 'type:', result.type)
+   return result
+ }
++
++// ===== 流式发言内容生成 =====
++
++function buildSpeechSystemPrompt(): string {
++  return `你正在参加一场圆桌讨论。根据你的角色和立场，针对当前话题发表观点。
++
++要求：
++1. 严格以第一人称发言，直接输出对话内容，不加引号、不署名、不加角色标注
++2. 控制在 1-2 句话（约 50-150 字）
++3. 语言自然、口语化，像是在真实对话
++4. 根据你的立场和角色表达观点，可适当回应或反驳前面的发言
++5. 只输出发言原文，不输出任何其他内容`
++}
++
++function buildSpeechUserPrompt(
++  ctx: SchedulingContext,
++  decision: { panelist_id: string; type: MessageType }
++): string {
++  const panelist = ctx.panelists.find(p => p.id === decision.panelist_id)
++  if (!panelist) throw new ValidationError('未找到发言嘉宾')
++
++  const history =
++    ctx.messages.length > 0
++      ? ctx.messages.slice(-8).map(m => `[${m.name}](${m.type}): ${m.content}`).join('\n')
++      : '(讨论尚未开始，你是第一个发言)'
++
++  const typeHint: Record<string, string> = {
++    opening: '你是主持人，请做一个精彩的开场白，引出话题',
++    closing: '你是主持人，请对讨论进行总结收尾',
++    statement: '请陈述你的核心观点',
++    rebuttal: '请针对最近的不同观点进行反驳',
++    supplement: '请在已有讨论基础上补充你的见解',
++  }
++
++  return `讨论话题：${ctx.topic}
++
++你的身份：
++- 名字：${panelist.name}
++- 角色：${panelist.role === 'host' ? '主持人' : '专家'}
++- 头衔：${panelist.title}
++- 立场：${panelist.stance}
++
++发言类型：${decision.type} — ${typeHint[decision.type] || '请发表观点'}
++
++最近讨论记录：
++${history}
++
++现在请你以 ${panelist.name} 的身份发言。只输出发言原文。`
++}
++
++export async function* generateSpeechStream(
++  ctx: SchedulingContext,
++  decision: { panelist_id: string; type: MessageType },
++  llm: LLMClient
++): AsyncGenerator<string> {
++  const messages = [
++    { role: 'system', content: buildSpeechSystemPrompt() },
++    { role: 'user', content: buildSpeechUserPrompt(ctx, decision) },
++  ]
++
++  for await (const token of llm.streamChat(messages)) {
++    yield token
++  }
++}
++
++export async function generateSpeechContent(
++  ctx: SchedulingContext,
++  decision: { panelist_id: string; type: MessageType },
++  llm: LLMClient
++): Promise<string> {
++  let content = ''
++  for await (const token of generateSpeechStream(ctx, decision, llm)) {
++    content += token
++  }
++  return content
++}
+diff --git a/server/src/services/llm.ts b/server/src/services/llm.ts
+index bfaa530..d3523c9 100644
+--- a/server/src/services/llm.ts
++++ b/server/src/services/llm.ts
+@@ -9,12 +9,26 @@ export function createLLMClient(apiKey: string): LLMClient {
+ 
+   return {
+     async chat(messages) {
+       const res = await client.chat.completions.create({
+         model: 'deepseek-chat',
+         messages: messages as Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+         temperature: 0.8,
+       })
+       return res.choices[0]?.message?.content ?? ''
+     },
++
++    async *streamChat(messages) {
++      const stream = await client.chat.completions.create({
++        model: 'deepseek-chat',
++        messages: messages as Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
++        temperature: 0.8,
++        stream: true,
++      })
++
++      for await (const chunk of stream) {
++        const delta = chunk.choices[0]?.delta?.content
++        if (delta) yield delta
++      }
++    },
+   }
+ }
+diff --git a/server/src/types/index.ts b/server/src/types/index.ts
+index efd9a8e..54d591e 100644
+--- a/server/src/types/index.ts
++++ b/server/src/types/index.ts
+@@ -6,20 +6,21 @@ export type PanelistStatus = 'standby' | 'preparing' | 'speaking'
+ export type MessageType = 'opening' | 'statement' | 'rebuttal' | 'supplement' | 'closing'
+ 
+ // ===== 数据库行类型 =====
+ 
+ export interface DiscussionRow {
+   id: string
+   topic: string
+   expert_count: number
+   status: DiscussionStatus
+   created_at: string
++  pinned_at: string | null
+ }
+ 
+ export interface PanelistRow {
+   id: string
+   discussion_id: string
+   name: string
+   role: PanelistRole
+   title: string
+   stance: string
+   color: string
+@@ -50,41 +51,42 @@ export interface DivergenceRow {
+   discussion_id: string
+   content: string
+   perspectives: string // SQLite stores JSON string
+   updated_at: string
+ }
+ 
+ // ===== LLM Client =====
+ 
+ export interface LLMClient {
+   chat(messages: { role: string; content: string }[]): Promise<string>
++  streamChat(messages: { role: string; content: string }[]): AsyncGenerator<string>
+ }
+ 
+ // ===== Business Input/Output Types =====
+ 
+ export interface GeneratePanelistsInput {
+   topic: string
+   expert_count: number
+ }
+ 
+ export interface GeneratedPanelist {
+   name: string
+   role: PanelistRole
+   title: string
+   stance: string
+   color: string
+ }
+ 
+ export interface SchedulingContext {
+   topic: string
+   messages: { panelist_id: string; name: string; content: string; type: MessageType }[]
+-  panelists: { id: string; name: string; role: PanelistRole; status: PanelistStatus }[]
++  panelists: { id: string; name: string; role: PanelistRole; title: string; stance: string; status: PanelistStatus }[]
+ }
+ 
+ export interface ConsensusInput {
+   topic: string
+   recentMessages: { panelist_id: string; name: string; content: string }[]
+   existingConsensus: { id: string; content: string; confidence: number }[]
+   existingDivergence: { id: string; content: string; perspectives: string[] }[]
+ }
+ 
+ export interface SchedulingDecision {

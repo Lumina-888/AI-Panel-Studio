@@ -19,7 +19,7 @@ export function TranscriptView() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+    <div className="flex-1 overflow-y-auto divide-y divide-accent-cyan/10">
       {messages.map((msg) => (
         <MessageBubble key={msg.id} message={msg} />
       ))}
@@ -41,7 +41,7 @@ function MessageBubble({ message }: { message: Message }) {
   }
 
   return (
-    <div className="animate-fade-in-up flex gap-3 group">
+    <div className="animate-fade-in-up flex gap-3 group px-6 py-5">
       {/* 发言人头像 */}
       <div
         className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shrink-0 mt-0.5"

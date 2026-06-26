@@ -1,35 +1,42 @@
-// ===== 核心数据模型 =====
+// Re-export shared base types
+import type {
+  DiscussionStatus,
+  PanelistRole,
+  PanelistStatus,
+  MessageType,
+  DiscussionRow,
+  PanelistRow,
+  MessageRow,
+  ConsensusRow,
+  DivergenceRow,
+} from '../../../shared/types'
 
-export type DiscussionStatus = 'pending' | 'live' | 'ended'
-export type PanelistRole = 'host' | 'expert'
-export type PanelistStatus = 'standby' | 'preparing' | 'speaking'
-export type MessageType = 'opening' | 'statement' | 'rebuttal' | 'supplement' | 'closing'
-
-export interface Discussion {
-  id: string
-  topic: string
-  expert_count: number
-  status: DiscussionStatus
-  created_at: string
+export type {
+  DiscussionStatus,
+  PanelistRole,
+  PanelistStatus,
+  MessageType,
+  DiscussionRow,
+  PanelistRow,
+  MessageRow,
+  ConsensusRow,
+  DivergenceRow,
 }
+
+// ===== Client-specific types =====
+
+/** Discussion as used by client */
+export type Discussion = DiscussionRow
 
 export interface DiscussionSummary extends Discussion {
   panelist_count: number
   message_count: number
 }
 
-export interface Panelist {
-  id: string
-  discussion_id: string
-  name: string
-  role: PanelistRole
-  title: string
-  stance: string
-  color: string
-  status: PanelistStatus
-  focus: string
-}
+/** Panelist as used by client — matches DB schema (focus is nullable) */
+export type Panelist = PanelistRow
 
+/** Enriched message with panelist display info */
 export interface Message {
   id: string
   discussion_id: string
@@ -43,14 +50,10 @@ export interface Message {
   created_at: string
 }
 
-export interface ConsensusPoint {
-  id: string
-  discussion_id: string
-  content: string
-  confidence: number
-  updated_at: string
-}
+/** Consensus point */
+export type ConsensusPoint = ConsensusRow
 
+/** Divergence point with parsed perspectives array */
 export interface DivergencePoint {
   id: string
   discussion_id: string
@@ -59,14 +62,16 @@ export interface DivergencePoint {
   updated_at: string
 }
 
-// ===== SSE 事件类型 =====
+// ===== SSE event types =====
 
 export type SSEEventType =
   | 'panelist_status'
   | 'transcript_message'
+  | 'message_token'
   | 'consensus_update'
   | 'divergence_update'
   | 'discussion_end'
+  | 'system_summary'
 
 export interface PanelistStatusEvent {
   panelist_id: string
@@ -76,4 +81,16 @@ export interface PanelistStatusEvent {
 
 export interface DiscussionEndEvent {
   summary: string
+}
+
+export interface MessageTokenEvent {
+  panelist_id: string
+  token: string
+  seq: number
+}
+
+export interface SystemSummaryEvent {
+  content: string
+  consensus: ConsensusPoint[]
+  divergence: DivergencePoint[]
 }

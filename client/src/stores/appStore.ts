@@ -15,9 +15,13 @@ interface AppState {
   createModalOpen: boolean
   openCreateModal: () => void
   closeCreateModal: () => void
+
+  // 删除 & 置顶
+  deleteDiscussion: (id: string) => Promise<void>
+  togglePin: (id: string, pinned: boolean) => Promise<void>
 }
 
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
   discussions: [],
   loading: false,
 
@@ -34,7 +38,8 @@ export const useAppStore = create<AppState>((set) => ({
         status: d.status,
         created_at: d.created_at,
         panelist_count: d.panelists?.length ?? 0,
-        message_count: d.messages?.length ?? 0,
+        message_count: d.message_count ?? 0,
+        pinned_at: d.pinned_at ?? null,
       }))
       set({ discussions, loading: false })
     } finally {
@@ -48,4 +53,22 @@ export const useAppStore = create<AppState>((set) => ({
   createModalOpen: false,
   openCreateModal: () => set({ createModalOpen: true }),
   closeCreateModal: () => set({ createModalOpen: false }),
+
+  deleteDiscussion: async (id) => {
+    await fetch(`/api/discussions/${id}`, { method: 'DELETE' })
+    set((s) => ({
+      discussions: s.discussions.filter(d => d.id !== id),
+      activeDiscussionId: s.activeDiscussionId === id ? null : s.activeDiscussionId,
+    }))
+  },
+
+  togglePin: async (id, pinned) => {
+    await fetch(`/api/discussions/${id}/pin`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned }),
+    })
+    // Re-fetch list for correct sort order
+    await get().fetchDiscussions()
+  },
 }))
