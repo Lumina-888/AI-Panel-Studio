@@ -16,5 +16,19 @@ export function createLLMClient(apiKey: string): LLMClient {
       })
       return res.choices[0]?.message?.content ?? ''
     },
+
+    async *streamChat(messages) {
+      const stream = await client.chat.completions.create({
+        model: 'deepseek-chat',
+        messages: messages as Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+        temperature: 0.8,
+        stream: true,
+      })
+
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta?.content
+        if (delta) yield delta
+      }
+    },
   }
 }
