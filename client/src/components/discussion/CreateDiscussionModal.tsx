@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '../../stores/appStore'
 import { CloseIcon } from '../layout/Icons'
+import { SlideButton } from '../common/SlideButton'
+import { OrbitLoader } from '../common/OrbitLoader'
 import type { Panelist } from '../../types'
 
 interface Props {
@@ -65,17 +67,17 @@ export function CreateDiscussionModal({ onClose }: Props) {
       <div className="glass-panel rounded-2xl w-[480px] max-w-[92vw] max-h-[85vh] overflow-y-auto
                       animate-fade-in-up shadow-[0_0_40px_rgba(0,229,255,0.1)]">
         {/* 顶栏 */}
-        <div className="flex items-center justify-between p-4 border-b border-border-glow">
+        <div className="flex items-center justify-between p-5 border-b border-border-glow">
           <h3 className="text-lg font-semibold text-text-primary">
             {step === 'input' ? '发起新讨论' : '确认嘉宾阵容'}
           </h3>
-          <button onClick={onClose} className="text-text-dim hover:text-text-primary cursor-pointer">
+          <button onClick={onClose} className="text-text-dim hover:text-text-primary transition-colors cursor-pointer">
             <CloseIcon />
           </button>
         </div>
 
         {step === 'input' && (
-          <div className="p-4 space-y-5">
+          <div className="p-5 space-y-5">
             <div>
               <label className="block text-sm text-text-dim mb-2">讨论话题</label>
               <textarea
@@ -91,7 +93,8 @@ export function CreateDiscussionModal({ onClose }: Props) {
 
             <div>
               <label className="block text-sm text-text-dim mb-2">
-                专家人数：<span className="text-accent-cyan font-mono">{expertCount}</span>
+                专家人数：
+                <span className="text-accent-cyan font-mono text-base">{expertCount}</span>
               </label>
               <input
                 type="range"
@@ -102,29 +105,41 @@ export function CreateDiscussionModal({ onClose }: Props) {
                 className="w-full accent-accent-cyan"
               />
               <div className="flex justify-between text-xs text-text-dim mt-1">
-                <span>2人</span><span>8人</span>
+                <span>2 人</span>
+                <span>8 人</span>
               </div>
             </div>
 
-            {error && <p className="text-accent-magenta text-sm">{error}</p>}
+            {error && (
+              <p className="text-accent-magenta text-sm bg-accent-magenta/5 rounded-lg p-2.5">{error}</p>
+            )}
 
-            <button
-              onClick={handleGenerate}
-              disabled={!topic.trim() || generating}
-              className="w-full py-3 rounded-xl font-semibold text-black
-                         bg-accent-cyan hover:shadow-[0_0_20px_rgba(0,229,255,0.4)]
-                         disabled:opacity-40 disabled:cursor-not-allowed
-                         transition-all cursor-pointer"
-            >
-              {generating ? '正在生成嘉宾...' : '生成嘉宾阵容'}
-            </button>
+            <div className="flex gap-3 pt-2">
+              <SlideButton
+                onClick={handleGenerate}
+                variant="primary"
+                disabled={!topic.trim() || generating}
+              >
+                {generating ? (
+                  <span className="flex items-center gap-2">
+                    <OrbitLoader />
+                    生成中...
+                  </span>
+                ) : (
+                  '生成嘉宾阵容'
+                )}
+              </SlideButton>
+              <SlideButton onClick={onClose} variant="default">
+                取消
+              </SlideButton>
+            </div>
           </div>
         )}
 
         {step === 'confirm' && (
-          <div className="p-4 space-y-4">
+          <div className="p-5 space-y-4">
             <p className="text-sm text-text-dim">
-              以下是为「<span className="text-text-primary">{topic}</span>」生成的嘉宾，确认后讨论即刻开始。
+              以下是为 <span className="text-text-primary font-medium">{topic}</span> 生成的嘉宾阵容，确认后讨论即刻开始。
             </p>
 
             <div className="space-y-2">
@@ -142,35 +157,32 @@ export function CreateDiscussionModal({ onClose }: Props) {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-text-primary">{p.name}</span>
-                      <span className={`text-xs px-1.5 py-0.5 rounded
-                        ${p.role === 'host' ? 'bg-accent-cyan/20 text-accent-cyan' : 'bg-white/10 text-text-dim'}`}>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                        p.role === 'host'
+                          ? 'bg-accent-cyan/20 text-accent-cyan'
+                          : 'bg-white/10 text-text-dim'
+                      }`}>
                         {p.role === 'host' ? '主持人' : '专家'}
                       </span>
                     </div>
-                    <p className="text-xs text-text-dim">{p.title}</p>
+                    <p className="text-xs text-text-dim mt-0.5">{p.title}</p>
                     <p className="text-xs text-text-dim mt-0.5">{p.stance}</p>
                   </div>
                 </div>
               ))}
             </div>
 
-            {error && <p className="text-accent-magenta text-sm">{error}</p>}
+            {error && (
+              <p className="text-accent-magenta text-sm bg-accent-magenta/5 rounded-lg p-2.5">{error}</p>
+            )}
 
-            <div className="flex gap-3">
-              <button
-                onClick={() => setStep('input')}
-                className="flex-1 py-2.5 rounded-xl border border-border-glow text-text-primary
-                           hover:bg-white/5 transition-colors cursor-pointer"
-              >
-                返回修改
-              </button>
-              <button
-                onClick={handleConfirm}
-                className="flex-1 py-2.5 rounded-xl bg-accent-cyan text-black font-semibold
-                           hover:shadow-[0_0_20px_rgba(0,229,255,0.4)] transition-all cursor-pointer"
-              >
+            <div className="flex gap-3 pt-2">
+              <SlideButton onClick={handleConfirm} variant="primary">
                 确认，开始讨论
-              </button>
+              </SlideButton>
+              <SlideButton onClick={() => setStep('input')} variant="default">
+                返回修改
+              </SlideButton>
             </div>
           </div>
         )}
