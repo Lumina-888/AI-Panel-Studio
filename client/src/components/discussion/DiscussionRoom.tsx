@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { useDiscussionStore } from '../../stores/discussionStore'
 import { LoadingIndicator } from '../common/LoadingIndicator'
+import { PulseDot } from '../common/PulseDot'
 import { TranscriptView } from '../transcript/TranscriptView'
 import { ConsensusDivergencePanel } from '../consensus/ConsensusDivergencePanel'
 
@@ -28,20 +29,16 @@ export function DiscussionRoom() {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="max-w-[1300px] mx-auto w-full flex flex-col h-full">
       {/* 顶栏 */}
-      <header className="h-14 flex items-center justify-between px-5 border-b border-border-glow glass-panel shrink-0">
+      <header className="h-14 flex items-center pl-4 pr-5 border-b border-border-glow glass-panel shrink-0">
         <h2 className="text-base font-semibold text-text-primary truncate max-w-[70%]">
           {discussion.topic}
         </h2>
-        <div className="flex items-center gap-2">
-          <span className={`h-2 w-2 rounded-full ${
-            discussion.status === 'live' ? 'bg-status-green animate-pulse-glow' : 'bg-status-gray'
-          }`} />
-          <span className="text-xs text-text-dim">
-            {discussion.status === 'live' ? '直播中' : discussion.status === 'ended' ? '已结束' : '待开始'}
-          </span>
-        </div>
+        <PulseDot
+          status={discussion.status === 'live' ? 'active' : discussion.status === 'pending' ? 'waiting' : 'ended'}
+          className="ml-3"
+        />
       </header>
 
       {/* Transcript + 共识/分歧 */}
