@@ -61,3 +61,6 @@ CREATE INDEX IF NOT EXISTS idx_messages_discussion ON messages(discussion_id, se
 CREATE INDEX IF NOT EXISTS idx_consensus_discussion ON consensus_points(discussion_id);
 CREATE INDEX IF NOT EXISTS idx_divergence_discussion ON divergence_points(discussion_id);
 CREATE INDEX IF NOT EXISTS idx_status_logs_panelist ON panelist_status_logs(panelist_id, recorded_at);
+
+-- v2: 讨论置顶
+ALTER TABLE discussions ADD COLUMN pinned_at TIMESTAMP;
