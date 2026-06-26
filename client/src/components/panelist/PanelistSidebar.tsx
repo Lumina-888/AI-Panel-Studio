@@ -1,4 +1,5 @@
 import { useDiscussionStore } from '../../stores/discussionStore'
+import { BarLoader } from '../common/BarLoader'
 
 interface Props {
   discussionId: string
@@ -16,7 +17,7 @@ export function PanelistSidebar(_props: Props) {
         </p>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+      <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-5">
         {panelists.map((p) => (
           <PanelistCard key={p.id} panelist={p} />
         ))}
@@ -38,7 +39,7 @@ function PanelistCard({ panelist: p }: { panelist: Panelist }) {
 
   return (
     <div
-      className={`p-3 rounded-xl border transition-all animate-fade-in-up
+      className={`py-3 px-3 rounded-xl border transition-all animate-fade-in-up
         ${p.status === 'speaking'
           ? 'border-accent-cyan/40 bg-accent-cyan/[0.06] shadow-[0_0_12px_rgba(0,229,255,0.08)]'
           : 'border-white/5 bg-white/[0.02]'
@@ -46,6 +47,13 @@ function PanelistCard({ panelist: p }: { panelist: Panelist }) {
     >
       {/* 头像 + 信息 */}
       <div className="flex items-center gap-3">
+        {/* BarLoader 音波条 */}
+        <div
+          className={`w-[100px] shrink-0 transition-opacity duration-300 ${p.status === 'speaking' ? 'opacity-100' : 'opacity-30'}`}
+        >
+          <BarLoader height={36} />
+        </div>
+
         <div className="relative shrink-0">
           <div
             className="w-10 h-10 rounded-full flex items-center justify-center text-lg font-bold"
