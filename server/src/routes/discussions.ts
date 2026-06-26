@@ -194,11 +194,16 @@ router.post('/:id/confirm', async (req: Request, res: Response) => {
     const panelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
     const messages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [req.params.id]) as MessageRow[]
 
+    const panelistNameMap: Record<string, string> = {}
+    for (const p of panelists) {
+      panelistNameMap[p.id] = p.name
+    }
+
     const decision = await decideNextSpeaker(
       {
         topic: discussion.topic,
         panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
-        messages: messages.map(m => ({ panelist_id: m.panelist_id, name: '', content: m.content, type: m.type })),
+        messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
       },
       llm
     )
@@ -216,10 +221,6 @@ router.post('/:id/confirm', async (req: Request, res: Response) => {
     )
 
     // Generate speech content (non-streaming for REST)
-    const panelistNameMap: Record<string, string> = {}
-    for (const p of panelists) {
-      panelistNameMap[p.id] = p.name
-    }
     const speechContent = await generateSpeechContent(
       {
         topic: discussion.topic,
@@ -273,11 +274,16 @@ router.post('/:id/start', async (req: Request, res: Response) => {
     const panelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
     const messages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [req.params.id]) as MessageRow[]
 
+    const panelistNameMap: Record<string, string> = {}
+    for (const p of panelists) {
+      panelistNameMap[p.id] = p.name
+    }
+
     const decision = await decideNextSpeaker(
       {
         topic: discussion.topic,
         panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
-        messages: messages.map(m => ({ panelist_id: m.panelist_id, name: '', content: m.content, type: m.type })),
+        messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
       },
       llm
     )
@@ -295,10 +301,6 @@ router.post('/:id/start', async (req: Request, res: Response) => {
     )
 
     // Generate speech content (non-streaming for REST)
-    const panelistNameMap: Record<string, string> = {}
-    for (const p of panelists) {
-      panelistNameMap[p.id] = p.name
-    }
     const speechContent = await generateSpeechContent(
       {
         topic: discussion.topic,

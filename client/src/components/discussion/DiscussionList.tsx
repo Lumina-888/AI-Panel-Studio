@@ -23,8 +23,10 @@ export function DiscussionList({ onNewDiscussion }: Props) {
 
   const handleDelete = async () => {
     if (!deleteTarget) return
+    const wasActive = deleteTarget.id === activeDiscussionId
     await deleteDiscussion(deleteTarget.id)
     setDeleteTarget(null)
+    if (wasActive) navigate('/')
   }
 
   const statusLabel = (s: string) => {

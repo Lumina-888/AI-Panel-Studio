@@ -39,6 +39,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         created_at: d.created_at,
         panelist_count: d.panelists?.length ?? 0,
         message_count: d.messages?.length ?? 0,
+        pinned_at: d.pinned_at ?? null,
       }))
       set({ discussions, loading: false })
     } finally {

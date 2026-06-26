@@ -92,5 +92,4 @@ export interface ConsensusInput {
 export interface SchedulingDecision {
   panelist_id: string
   type: MessageType
-  content: string
 }
