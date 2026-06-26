@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { getDb, queryAll, queryOne, execute } from '../db/index.js'
 import { createLLMClient } from '../services/llm.js'
 import { generatePanelists } from '../services/panelist.js'
-import { decideNextSpeaker } from '../services/discussion.js'
+import { decideNextSpeaker, generateSpeechStream, generateSpeechContent } from '../services/discussion.js'
 import { extractConsensus } from '../services/consensus.js'
 import type { DiscussionRow, PanelistRow, MessageRow, ConsensusRow, DivergenceRow } from '../types/index.js'
 
@@ -30,7 +30,7 @@ function enrichMessages(
 router.get('/', async (_req: Request, res: Response) => {
   try {
     const db = await getDb()
-    const discussions = queryAll(db, 'SELECT * FROM discussions ORDER BY created_at DESC') as DiscussionRow[]
+    const discussions = queryAll(db, 'SELECT * FROM discussions ORDER BY pinned_at IS NOT NULL DESC, pinned_at DESC, created_at DESC') as DiscussionRow[]
 
     const enriched = discussions.map(d => {
       const panelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [d.id]) as PanelistRow[]
@@ -119,6 +119,53 @@ router.get('/:id', async (req: Request, res: Response) => {
   }
 })
 
+// DELETE /api/discussions/:id — 删除讨论
+router.delete('/:id', async (req: Request, res: Response) => {
+  try {
+    const db = await getDb()
+    const discussion = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [req.params.id]) as DiscussionRow | undefined
+    if (!discussion) {
+      res.status(404).json({ error: '讨论不存在' })
+      return
+    }
+
+    // FK ON DELETE CASCADE 自动删除关联数据
+    execute(db, 'DELETE FROM discussions WHERE id = ?', [req.params.id])
+
+    console.log('[DELETE /api/discussions/:id] 讨论已删除, id:', req.params.id)
+    res.json({ success: true })
+  } catch (e) {
+    console.error('[DELETE /api/discussions/:id] 错误:', e)
+    res.status(500).json({ error: '删除讨论失败' })
+  }
+})
+
+// PATCH /api/discussions/:id/pin — 置顶/取消置顶
+router.patch('/:id/pin', async (req: Request, res: Response) => {
+  try {
+    const db = await getDb()
+    const discussion = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [req.params.id]) as DiscussionRow | undefined
+    if (!discussion) {
+      res.status(404).json({ error: '讨论不存在' })
+      return
+    }
+
+    const { pinned } = req.body
+    if (pinned) {
+      execute(db, "UPDATE discussions SET pinned_at = datetime('now') WHERE id = ?", [req.params.id])
+    } else {
+      execute(db, 'UPDATE discussions SET pinned_at = NULL WHERE id = ?', [req.params.id])
+    }
+
+    const updated = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [req.params.id]) as DiscussionRow
+    console.log('[PATCH /api/discussions/:id/pin] 置顶状态更新, id:', req.params.id, 'pinned:', pinned)
+    res.json(updated)
+  } catch (e) {
+    console.error('[PATCH /api/discussions/:id/pin] 错误:', e)
+    res.status(500).json({ error: '置顶操作失败' })
+  }
+})
+
 // POST /api/discussions/:id/confirm — 确认并开始讨论（前端调用）
 router.post('/:id/confirm', async (req: Request, res: Response) => {
   try {
@@ -150,7 +197,7 @@ router.post('/:id/confirm', async (req: Request, res: Response) => {
     const decision = await decideNextSpeaker(
       {
         topic: discussion.topic,
-        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, status: p.status })),
+        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
         messages: messages.map(m => ({ panelist_id: m.panelist_id, name: '', content: m.content, type: m.type })),
       },
       llm
@@ -160,13 +207,30 @@ router.post('/:id/confirm', async (req: Request, res: Response) => {
     const nextSeq = messages.length + 1
     execute(db,
       'INSERT INTO messages (id, discussion_id, panelist_id, content, type, seq) VALUES (?, ?, ?, ?, ?, ?)',
-      [msgId, req.params.id, decision.panelist_id, decision.content, decision.type, nextSeq]
+      [msgId, req.params.id, decision.panelist_id, '', decision.type, nextSeq]
     )
 
     execute(db, 'UPDATE panelists SET status = ? WHERE id = ?', ['speaking', decision.panelist_id])
     execute(db, 'INSERT INTO panelist_status_logs (id, panelist_id, status, focus) VALUES (?, ?, ?, ?)',
       [uuidv4(), decision.panelist_id, 'speaking', null]
     )
+
+    // Generate speech content (non-streaming for REST)
+    const panelistNameMap: Record<string, string> = {}
+    for (const p of panelists) {
+      panelistNameMap[p.id] = p.name
+    }
+    const speechContent = await generateSpeechContent(
+      {
+        topic: discussion.topic,
+        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
+        messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
+      },
+      decision,
+      llm
+    )
+
+    execute(db, 'UPDATE messages SET content = ? WHERE id = ?', [speechContent, msgId])
 
     const updatedDiscussion = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [req.params.id]) as DiscussionRow
     const updatedPanelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
@@ -212,7 +276,7 @@ router.post('/:id/start', async (req: Request, res: Response) => {
     const decision = await decideNextSpeaker(
       {
         topic: discussion.topic,
-        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, status: p.status })),
+        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
         messages: messages.map(m => ({ panelist_id: m.panelist_id, name: '', content: m.content, type: m.type })),
       },
       llm
@@ -222,13 +286,30 @@ router.post('/:id/start', async (req: Request, res: Response) => {
     const nextSeq = messages.length + 1
     execute(db,
       'INSERT INTO messages (id, discussion_id, panelist_id, content, type, seq) VALUES (?, ?, ?, ?, ?, ?)',
-      [msgId, req.params.id, decision.panelist_id, decision.content, decision.type, nextSeq]
+      [msgId, req.params.id, decision.panelist_id, '', decision.type, nextSeq]
     )
 
     execute(db, 'UPDATE panelists SET status = ? WHERE id = ?', ['speaking', decision.panelist_id])
     execute(db, 'INSERT INTO panelist_status_logs (id, panelist_id, status, focus) VALUES (?, ?, ?, ?)',
       [uuidv4(), decision.panelist_id, 'speaking', null]
     )
+
+    // Generate speech content (non-streaming for REST)
+    const panelistNameMap: Record<string, string> = {}
+    for (const p of panelists) {
+      panelistNameMap[p.id] = p.name
+    }
+    const speechContent = await generateSpeechContent(
+      {
+        topic: discussion.topic,
+        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
+        messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
+      },
+      decision,
+      llm
+    )
+
+    execute(db, 'UPDATE messages SET content = ? WHERE id = ?', [speechContent, msgId])
 
     const updatedDiscussion = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [req.params.id]) as DiscussionRow
     const updatedPanelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
@@ -277,7 +358,7 @@ router.post('/:id/next-step', async (req: Request, res: Response) => {
     const decision = await decideNextSpeaker(
       {
         topic: discussion.topic,
-        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, status: p.status })),
+        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
         messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
       },
       llm
@@ -287,13 +368,26 @@ router.post('/:id/next-step', async (req: Request, res: Response) => {
     const nextSeq = messages.length + 1
     execute(db,
       'INSERT INTO messages (id, discussion_id, panelist_id, content, type, seq) VALUES (?, ?, ?, ?, ?, ?)',
-      [msgId, req.params.id, decision.panelist_id, decision.content, decision.type, nextSeq]
+      [msgId, req.params.id, decision.panelist_id, '', decision.type, nextSeq]
     )
 
     execute(db, 'UPDATE panelists SET status = ? WHERE id = ?', ['speaking', decision.panelist_id])
     execute(db, 'INSERT INTO panelist_status_logs (id, panelist_id, status, focus) VALUES (?, ?, ?, ?)',
       [uuidv4(), decision.panelist_id, 'speaking', null]
     )
+
+    // Generate speech content (non-streaming for REST)
+    const speechContent = await generateSpeechContent(
+      {
+        topic: discussion.topic,
+        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
+        messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
+      },
+      decision,
+      llm
+    )
+
+    execute(db, 'UPDATE messages SET content = ? WHERE id = ?', [speechContent, msgId])
 
     let consensusResult = { consensus: [] as { content: string; confidence: number }[], divergence: [] as { content: string; perspectives: string[] }[] }
     if (nextSeq >= 4) {
@@ -441,7 +535,7 @@ router.get('/:id/stream', async (req: Request, res: Response) => {
       const decision = await decideNextSpeaker(
         {
           topic: discussion.topic,
-          panelists: currentPanelists.map(p => ({ id: p.id, name: p.name, role: p.role, status: p.status })),
+          panelists: currentPanelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
           messages: currentMessages.map(m => ({
             panelist_id: m.panelist_id,
             name: nameMap[m.panelist_id] || '',
@@ -454,23 +548,70 @@ router.get('/:id/stream', async (req: Request, res: Response) => {
 
       if (aborted) break
 
-      // 持久化消息
+      // Insert placeholder message
       const msgId = uuidv4()
       const nextSeq = currentMessages.length + 1
       execute(db,
         'INSERT INTO messages (id, discussion_id, panelist_id, content, type, seq) VALUES (?, ?, ?, ?, ?, ?)',
-        [msgId, req.params.id, decision.panelist_id, decision.content, decision.type, nextSeq]
+        [msgId, req.params.id, decision.panelist_id, '', decision.type, nextSeq]
       )
 
-      // 更新 panelist 状态：所有 speaking 的切回 standby，新发言人设为 speaking
+      // Update panelist status
       execute(db, 'UPDATE panelists SET status = ? WHERE discussion_id = ? AND status = ?', ['standby', req.params.id, 'speaking'])
       execute(db, 'UPDATE panelists SET status = ? WHERE id = ?', ['speaking', decision.panelist_id])
       execute(db, 'INSERT INTO panelist_status_logs (id, panelist_id, status, focus) VALUES (?, ?, ?, ?)',
         [uuidv4(), decision.panelist_id, 'speaking', null]
       )
 
-      // 发送 transcript_message 事件
-      const speaker = currentPanelists.find(p => p.id === decision.panelist_id)
+      // Send panelist_status events
+      const updatedPanelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
+      for (const p of updatedPanelists) {
+        sendEvent('panelist_status', {
+          panelist_id: p.id,
+          status: p.status,
+          focus: p.focus,
+        })
+      }
+
+      // Stream speech content token by token
+      let fullContent = ''
+      try {
+        for await (const token of generateSpeechStream(
+          {
+            topic: discussion.topic,
+            panelists: currentPanelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
+            messages: currentMessages.map(m => ({
+              panelist_id: m.panelist_id,
+              name: nameMap[m.panelist_id] || '',
+              content: m.content,
+              type: m.type,
+            })),
+          },
+          decision,
+          llm
+        )) {
+          if (aborted) break
+          fullContent += token
+          sendEvent('message_token', {
+            panelist_id: decision.panelist_id,
+            token,
+            seq: nextSeq,
+          })
+        }
+      } catch (streamErr) {
+        console.error('[SSE] 流式生成失败:', streamErr)
+        if (!aborted && fullContent.length === 0) {
+          fullContent = '（发言生成失败）'
+        }
+      }
+
+      if (aborted) break
+
+      // Persist complete content
+      execute(db, 'UPDATE messages SET content = ? WHERE id = ?', [fullContent, msgId])
+
+      // Send complete transcript_message
+      const speaker = updatedPanelists.find(p => p.id === decision.panelist_id)
       sendEvent('transcript_message', {
         id: msgId,
         discussion_id: req.params.id,
@@ -478,20 +619,11 @@ router.get('/:id/stream', async (req: Request, res: Response) => {
         name: speaker?.name ?? nameMap[decision.panelist_id] ?? '未知',
         title: speaker?.title ?? '',
         color: speaker?.color ?? '#888888',
-        content: decision.content,
+        content: fullContent,
         type: decision.type,
         seq: nextSeq,
         created_at: new Date().toISOString(),
       })
-
-      // 发送 panelist_status 事件
-      for (const p of currentPanelists) {
-        sendEvent('panelist_status', {
-          panelist_id: p.id,
-          status: p.id === decision.panelist_id ? 'speaking' as const : (p.status === 'speaking' ? 'standby' as const : p.status),
-          focus: null as string | null,
-        })
-      }
 
       // 每隔约 3 条新消息提取共识/分歧（首次在 ≥4 条时）
       const totalMsgs = currentMessages.length + 1
@@ -546,7 +678,7 @@ router.get('/:id/stream', async (req: Request, res: Response) => {
         for (const p of currentPanelists) {
           execute(db, 'UPDATE panelists SET status = ? WHERE id = ?', ['standby', p.id])
         }
-        sendEvent('discussion_end', { summary: decision.type === 'closing' ? decision.content : '讨论已到达最大轮次' })
+        sendEvent('discussion_end', { summary: decision.type === 'closing' ? fullContent : '讨论已到达最大轮次' })
         console.log('[SSE] 讨论结束, id:', req.params.id)
         break
       }
