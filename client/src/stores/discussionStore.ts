@@ -23,6 +23,7 @@ interface DiscussionState {
 
   // 实时更新
   addMessage: (msg: Message) => void
+  appendMessageToken: (panelist_id: string, token: string, seq: number) => void
   updatePanelistStatus: (e: PanelistStatusEvent) => void
   upsertConsensus: (point: ConsensusPoint) => void
   upsertDivergence: (point: DivergencePoint) => void
@@ -57,6 +58,7 @@ export const useDiscussionStore = create<DiscussionState>((set, get) => ({
           expert_count: data.expert_count,
           status: data.status,
           created_at: data.created_at,
+          pinned_at: data.pinned_at ?? null,
         },
         panelists: data.panelists || [],
         messages: data.messages || [],
@@ -78,6 +80,11 @@ export const useDiscussionStore = create<DiscussionState>((set, get) => ({
     es.addEventListener('panelist_status', (e) => {
       const data: PanelistStatusEvent = JSON.parse(e.data)
       get().updatePanelistStatus(data)
+    })
+
+    es.addEventListener('message_token', (e) => {
+      const data: { panelist_id: string; token: string; seq: number } = JSON.parse(e.data)
+      get().appendMessageToken(data.panelist_id, data.token, data.seq)
     })
 
     es.addEventListener('transcript_message', (e) => {
@@ -113,8 +120,43 @@ export const useDiscussionStore = create<DiscussionState>((set, get) => ({
 
   addMessage: (msg) =>
     set((s) => {
+      // Dedup by id
       if (s.messages.some(m => m.id === msg.id)) return s
-      return { messages: [...s.messages, msg] }
+      // Replace streaming placeholder (same seq, streaming- prefix)
+      const idxBySeq = s.messages.findIndex(m => m.seq === msg.seq && m.id.startsWith('streaming-'))
+      if (idxBySeq >= 0) {
+        const updated = [...s.messages]
+        updated[idxBySeq] = msg
+        return { messages: updated }
+      }
+      return { messages: [...s.messages, msg].sort((a, b) => a.seq - b.seq) }
+    }),
+
+  appendMessageToken: (panelist_id, token, seq) =>
+    set((s) => {
+      const idx = s.messages.findIndex(m => m.seq === seq)
+      if (idx >= 0) {
+        // Existing placeholder — append token
+        const updated = [...s.messages]
+        updated[idx] = { ...updated[idx], content: updated[idx].content + token }
+        return { messages: updated }
+      }
+      // No placeholder yet — create one
+      const placeholder: Message = {
+        id: `streaming-${seq}`,
+        discussion_id: s.discussion?.id ?? '',
+        panelist_id,
+        name: s.panelists.find(p => p.id === panelist_id)?.name ?? '',
+        title: s.panelists.find(p => p.id === panelist_id)?.title ?? '',
+        color: s.panelists.find(p => p.id === panelist_id)?.color ?? '#888888',
+        content: token,
+        type: 'statement',
+        seq,
+        created_at: new Date().toISOString(),
+      }
+      // Insert sorted by seq
+      const inserted = [...s.messages, placeholder].sort((a, b) => a.seq - b.seq)
+      return { messages: inserted }
     }),
 
   updatePanelistStatus: ({ panelist_id, status, focus }) =>
