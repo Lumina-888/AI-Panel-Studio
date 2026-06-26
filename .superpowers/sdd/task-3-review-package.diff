@@ -1,0 +1,39 @@
+=== COMMITS ===
+0052098 feat: add streamChat method to LLM client
+
+=== DIFF STAT ===
+ server/src/services/llm.ts | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+=== FULL DIFF ===
+diff --git a/server/src/services/llm.ts b/server/src/services/llm.ts
+index bfaa530..d3523c9 100644
+--- a/server/src/services/llm.ts
++++ b/server/src/services/llm.ts
+@@ -9,12 +9,26 @@ export function createLLMClient(apiKey: string): LLMClient {
+ 
+   return {
+     async chat(messages) {
+       const res = await client.chat.completions.create({
+         model: 'deepseek-chat',
+         messages: messages as Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+         temperature: 0.8,
+       })
+       return res.choices[0]?.message?.content ?? ''
+     },
++
++    async *streamChat(messages) {
++      const stream = await client.chat.completions.create({
++        model: 'deepseek-chat',
++        messages: messages as Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
++        temperature: 0.8,
++        stream: true,
++      })
++
++      for await (const chunk of stream) {
++        const delta = chunk.choices[0]?.delta?.content
++        if (delta) yield delta
++      }
++    },
+   }
+ }

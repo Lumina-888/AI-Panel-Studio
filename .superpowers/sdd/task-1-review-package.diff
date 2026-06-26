@@ -1,0 +1,26 @@
+=== COMMITS ===
+c3c2f62 schema: add pinned_at column to discussions
+
+=== DIFF STAT ===
+ server/migrations/init.sql | 3 +++
+ 1 file changed, 3 insertions(+)
+
+=== FULL DIFF ===
+diff --git a/server/migrations/init.sql b/server/migrations/init.sql
+index 31fd891..d31a97b 100644
+--- a/server/migrations/init.sql
++++ b/server/migrations/init.sql
+@@ -54,10 +54,13 @@ CREATE TABLE IF NOT EXISTS panelist_status_logs (
+     focus TEXT,
+     recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+ );
+ 
+ -- 索引
+ CREATE INDEX IF NOT EXISTS idx_panelists_discussion ON panelists(discussion_id);
+ CREATE INDEX IF NOT EXISTS idx_messages_discussion ON messages(discussion_id, seq);
+ CREATE INDEX IF NOT EXISTS idx_consensus_discussion ON consensus_points(discussion_id);
+ CREATE INDEX IF NOT EXISTS idx_divergence_discussion ON divergence_points(discussion_id);
+ CREATE INDEX IF NOT EXISTS idx_status_logs_panelist ON panelist_status_logs(panelist_id, recorded_at);
++
++-- v2: 讨论置顶
++ALTER TABLE discussions ADD COLUMN pinned_at TIMESTAMP;

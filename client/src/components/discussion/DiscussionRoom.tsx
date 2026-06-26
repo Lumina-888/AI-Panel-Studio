@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { useDiscussionStore } from '../../stores/discussionStore'
+import { LoadingIndicator } from '../common/LoadingIndicator'
 import { TranscriptView } from '../transcript/TranscriptView'
 import { ConsensusDivergencePanel } from '../consensus/ConsensusDivergencePanel'
 
@@ -19,8 +20,9 @@ export function DiscussionRoom() {
 
   if (loading || !discussion) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <p className="text-text-dim">加载讨论中...</p>
+      <div className="flex-1 flex flex-col items-center justify-center gap-4">
+        <LoadingIndicator visible />
+        <p className="text-text-dim text-sm">加载讨论中...</p>
       </div>
     )
   }
