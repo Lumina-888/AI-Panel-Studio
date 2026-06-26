@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { LLMClient, GeneratePanelistsInput, GeneratedPanelist } from '../types/index.js'
 import { ValidationError, LLMParseError } from '../utils/errors.js'
+import { extractJson } from '../utils/json.js'
 
 const PanelistSchema = z.object({
   name: z.string().min(1),
@@ -37,23 +38,10 @@ function buildUserPrompt(topic: string, expertCount: number): string {
   return `讨论话题：${topic}\n指定专家人数：${expertCount}`
 }
 
-function extractJson(response: string): string {
-  const codeBlock = response.match(/```(?:json)?\s*([\s\S]*?)```/)
-  if (codeBlock) return codeBlock[1].trim()
-
-  const firstBrace = response.indexOf('{')
-  const lastBrace = response.lastIndexOf('}')
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    return response.slice(firstBrace, lastBrace + 1)
-  }
-
-  return response.trim()
-}
-
 function parseResponse(response: string): GeneratedPanelist[] {
-  const jsonStr = extractJson(response)
   let data: unknown
   try {
+    const jsonStr = extractJson(response, '嘉宾生成')
     data = JSON.parse(jsonStr)
   } catch {
     throw new LLMParseError('LLM 返回内容无法解析为 JSON')

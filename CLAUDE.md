@@ -37,10 +37,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 样式 | Tailwind CSS | v4 | 深色科技感演播厅主题 |
 | 状态管理 | Zustand | v5 | 轻量，支持多讨论并行隔离 |
 | 后端 | Node.js + Express + TypeScript | Express 5 / TS 5.8 | REST + SSE |
-| 数据库 | SQLite（better-sqlite3） | v11 | 本地文件存储，零配置 |
+| 数据库 | SQLite（sql.js WASM） | v1.14 | 内存运行 + 持久化到本地文件，零安装 |
 | 实时通信 | SSE（Server-Sent Events） | 原生 | 单向推送讨论事件流 |
 | LLM | DeepSeek V4 Pro API | OpenAI 兼容 | `baseURL: https://api.deepseek.com/v1` |
-| 测试 | Vitest + Playwright | Vitest 4 / Playwright 1.54 | 单元集成 + E2E |
+| 测试 | Vitest + Playwright | Vitest 4 / Playwright 1.61 | 单元集成 + E2E |
 
 ## 项目结构
 
@@ -58,6 +58,10 @@ ai-panel-studio/
 │   │   ├── hooks/             # 自定义 hooks（SSE 连接等）
 │   │   ├── types/             # 前端类型定义
 │   │   └── utils/
+│   ├── e2e/                     # Playwright E2E 测试
+│   │   ├── mock-server/          # Mock API 服务器
+│   │   ├── fixtures/             # 测试数据工厂
+│   │   └── tests/                # E2E 测试用例
 │   └── index.html
 ├── server/                    # 后端 Express 应用
 │   ├── src/
@@ -74,7 +78,6 @@ ai-panel-studio/
 │   ├── data/                  # SQLite 数据库文件（Git 忽略）
 │   ├── migrations/            # SQLite 初始化脚本
 │   └── seeds/                 # 样例数据（≥5 条）
-├── e2e/                       # Playwright E2E 测试
 ├── prompts/                   # 核心 Prompt 记录（≥5 段）
 ├── docs/                      # 开发文档
 │   ├── PRD.md
@@ -120,6 +123,7 @@ DATABASE_PATH=./server/data/panel.db
 ## 注意事项
 
 - SQLite 数据库文件位于 `server/data/` 目录，已在 `.gitignore` 中排除
+- 当上下文达到80%时，进行自动压缩上下文
 - 
 ## 项目特定指南
 

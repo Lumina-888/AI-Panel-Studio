@@ -9,6 +9,11 @@ let SQL: SqlJsStatic | null = null
 let db: SqlJsDb | null = null
 let dbPath: string | null = null
 
+// Debounce state for saveToDisk
+let saveTimeout: ReturnType<typeof setTimeout> | null = null
+let pendingSave = false
+const SAVE_DEBOUNCE_MS = 500
+
 function ensureDir(filePath: string): void {
   const dir = path.dirname(filePath)
   if (!fs.existsSync(dir)) {
@@ -17,11 +22,35 @@ function ensureDir(filePath: string): void {
 }
 
 function saveToDisk(): void {
+  // Cancel any pending debounced save
+  if (saveTimeout) {
+    clearTimeout(saveTimeout)
+    saveTimeout = null
+    pendingSave = false
+  }
   if (db && dbPath) {
     const data = db.export()
     const buffer = Buffer.from(data)
     fs.writeFileSync(dbPath, buffer)
   }
+}
+
+function scheduleSave(): void {
+  if (pendingSave) return
+  pendingSave = true
+  saveTimeout = setTimeout(() => {
+    try {
+      if (db && dbPath) {
+        const data = db.export()
+        fs.writeFileSync(dbPath, Buffer.from(data))
+      }
+    } catch (err) {
+      console.error('[DB] scheduleSave 写入失败:', (err as Error).message)
+    } finally {
+      pendingSave = false
+      saveTimeout = null
+    }
+  }, SAVE_DEBOUNCE_MS)
 }
 
 export async function getDb(dbPathOverride?: string): Promise<SqlJsDb> {
@@ -74,13 +103,13 @@ export function queryOne(database: SqlJsDb, sql: string, params: any[] = []): an
 // Helper to run an INSERT/UPDATE/DELETE (mimics better-sqlite3 .run())
 export function execute(database: SqlJsDb, sql: string, params: any[] = []): void {
   database.run(sql, params)
-  saveToDisk()
+  scheduleSave()
 }
 
-// Multi-statement exec
+// Multi-statement exec — 使用 exec() 执行全部语句（run() 只执行第一条）
 export function execSql(database: SqlJsDb, sql: string): void {
-  database.run(sql)
-  saveToDisk()
+  database.exec(sql)
+  scheduleSave()
 }
 
 export async function initDb(): Promise<void> {
@@ -91,11 +120,41 @@ export async function initDb(): Promise<void> {
     // Split by semicolons, filter empty
     const statements = migration.split(';').filter(s => s.trim().length > 0)
     for (const stmt of statements) {
-      try {
+      // 去除开头的 SQL 注释行（如 -- v2: xxx）
+      let trimmed = stmt.trim()
+      while (trimmed.startsWith('--')) {
+        const newlineIdx = trimmed.indexOf('\n')
+        if (newlineIdx === -1) {
+          trimmed = '' // 整段都是注释
+          break
+        }
+        trimmed = trimmed.slice(newlineIdx + 1).trim()
+      }
+      if (!trimmed) continue
+      const upperStmt = trimmed.toUpperCase()
+
+      if (upperStmt.startsWith('ALTER TABLE')) {
+        // 幂等处理 ALTER TABLE：捕获 "duplicate column" 错误
+        try {
+          database.run(stmt + ';')
+        } catch (e: any) {
+          if (e.message?.includes('duplicate column')) {
+            console.log('[DB] ALTER TABLE 已执行过，跳过:', trimmed.slice(0, 60))
+          } else {
+            throw e
+          }
+        }
+      } else if (upperStmt.startsWith('CREATE TABLE') || upperStmt.startsWith('CREATE INDEX')) {
+        // IF NOT EXISTS 已保证幂等
         database.run(stmt + ';')
-      } catch (e) {
-        // Ignore "already exists" errors
-        console.log('[DB] Migration statement note:', (e as Error).message)
+      } else if (upperStmt.length > 0) {
+        // 未知语句类型 — 执行并报告错误（不静默吞掉）
+        try {
+          database.run(stmt + ';')
+        } catch (e) {
+          console.error('[DB] Migration statement failed:', (e as Error).message)
+          throw e
+        }
       }
     }
     saveToDisk()
@@ -123,3 +182,4 @@ export async function seedDb(): Promise<void> {
 
 // Get the raw Database instance for backwards compatibility
 export { initSqlJs }
+export type { SqlJsDb }

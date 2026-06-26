@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { LLMClient, SchedulingContext, MessageType } from '../types/index.js'
 import { ValidationError, LLMParseError } from '../utils/errors.js'
+import { extractJson } from '../utils/json.js'
 
 /** 讨论最大轮次 — 达到此值后强制结束 */
 export const MAX_ROUNDS = 15
@@ -58,21 +59,13 @@ function normalizeMessageType(type: string): MessageType {
   return 'statement'
 }
 
-function extractJson(response: string): string {
-  const jsonMatch = response.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) {
-    throw new LLMParseError('LLM 返回中未找到 JSON 结构')
-  }
-  return jsonMatch[0]
-}
-
 function parseResponse(
   response: string,
   ctx: SchedulingContext
 ): { panelist_id: string; type: MessageType } {
   let data: unknown
   try {
-    data = JSON.parse(extractJson(response))
+    data = JSON.parse(extractJson(response, '发言调度'))
   } catch {
     throw new LLMParseError('LLM 返回的 JSON 解析失败')
   }

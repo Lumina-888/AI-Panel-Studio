@@ -1,6 +1,6 @@
 import express from 'express'
 import cors from 'cors'
-import { initDb, seedDb } from './db/index.js'
+import { initDb, seedDb, closeDb } from './db/index.js'
 import discussionsRouter from './routes/discussions.js'
 
 // Load .env manually
@@ -58,10 +58,23 @@ async function main() {
     res.json({ status: 'ok', timestamp: new Date().toISOString() })
   })
 
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`[Server] AI Panel Studio 后端已启动: http://localhost:${PORT}`)
     console.log(`[Server] DEEPSEEK_API_KEY ${process.env.DEEPSEEK_API_KEY ? '已配置' : '⚠️ 未配置'}`)
   })
+
+  // 优雅关闭：刷写待处理的数据库写入
+  const gracefulShutdown = async (signal: string) => {
+    console.log(`[Server] 收到 ${signal}，正在关闭...`)
+    await closeDb()
+    server.close(() => {
+      console.log('[Server] 服务器已关闭')
+      process.exit(0)
+    })
+  }
+
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'))
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
 }
 
 main().catch(err => {

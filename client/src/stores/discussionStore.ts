@@ -81,40 +81,54 @@ export const useDiscussionStore = create<DiscussionState>((set, get) => ({
 
     const es = new EventSource(`/api/discussions/${discussionId}/stream`)
 
+    // 安全解析 SSE 事件数据，解析失败时静默返回 null
+    const safeParse = <T>(e: MessageEvent): T | null => {
+      try {
+        return JSON.parse(e.data) as T
+      } catch {
+        console.warn('[SSE] JSON 解析失败:', e.type, (e as any).data?.slice?.(0, 100))
+        return null
+      }
+    }
+
     es.addEventListener('panelist_status', (e) => {
-      const data: PanelistStatusEvent = JSON.parse(e.data)
-      get().updatePanelistStatus(data)
+      const data = safeParse<PanelistStatusEvent>(e)
+      if (data) get().updatePanelistStatus(data)
     })
 
     es.addEventListener('message_token', (e) => {
-      const data: { panelist_id: string; token: string; seq: number } = JSON.parse(e.data)
-      get().appendMessageToken(data.panelist_id, data.token, data.seq)
+      const data = safeParse<{ panelist_id: string; token: string; seq: number }>(e)
+      if (data) get().appendMessageToken(data.panelist_id, data.token, data.seq)
     })
 
     es.addEventListener('transcript_message', (e) => {
-      const msg: Message = JSON.parse(e.data)
-      get().addMessage(msg)
+      const msg = safeParse<Message>(e)
+      if (msg) get().addMessage(msg)
     })
 
     es.addEventListener('consensus_update', (e) => {
-      const point: ConsensusPoint = JSON.parse(e.data)
-      get().upsertConsensus(point)
+      const point = safeParse<ConsensusPoint>(e)
+      if (point) get().upsertConsensus(point)
     })
 
     es.addEventListener('divergence_update', (e) => {
-      const point: DivergencePoint = JSON.parse(e.data)
-      get().upsertDivergence(point)
+      const point = safeParse<DivergencePoint>(e)
+      if (point) get().upsertDivergence(point)
     })
 
     es.addEventListener('discussion_end', (e) => {
-      const { summary } = JSON.parse(e.data)
-      get().endDiscussion(summary)
+      const data = safeParse<{ summary: string }>(e)
+      if (data) get().endDiscussion(data.summary)
     })
 
     es.addEventListener('system_summary', (e) => {
-      const data: SystemSummaryEvent = JSON.parse(e.data)
-      get().setSystemSummary(data)
+      const data = safeParse<SystemSummaryEvent>(e)
+      if (data) get().setSystemSummary(data)
     })
+
+    es.onerror = () => {
+      console.warn('[SSE] 连接错误或服务端断开, discussion:', discussionId)
+    }
 
     set({ eventSource: es })
   },

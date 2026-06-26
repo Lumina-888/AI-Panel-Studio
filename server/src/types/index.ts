@@ -1,67 +1,34 @@
-// ===== 枚举类型 =====
+// Re-export shared base types
+import type {
+  DiscussionStatus,
+  PanelistRole,
+  PanelistStatus,
+  MessageType,
+  DiscussionRow,
+  PanelistRow,
+  MessageRow,
+  ConsensusRow,
+  DivergenceRow,
+} from '../../../shared/types.js'
 
-export type DiscussionStatus = 'pending' | 'live' | 'ended'
-export type PanelistRole = 'host' | 'expert'
-export type PanelistStatus = 'standby' | 'preparing' | 'speaking'
-export type MessageType = 'opening' | 'statement' | 'rebuttal' | 'supplement' | 'closing'
-
-// ===== 数据库行类型 =====
-
-export interface DiscussionRow {
-  id: string
-  topic: string
-  expert_count: number
-  status: DiscussionStatus
-  created_at: string
-  pinned_at: string | null
+export type {
+  DiscussionStatus,
+  PanelistRole,
+  PanelistStatus,
+  MessageType,
+  DiscussionRow,
+  PanelistRow,
+  MessageRow,
+  ConsensusRow,
+  DivergenceRow,
 }
 
-export interface PanelistRow {
-  id: string
-  discussion_id: string
-  name: string
-  role: PanelistRole
-  title: string
-  stance: string
-  color: string
-  status: PanelistStatus
-  focus: string | null
-}
-
-export interface MessageRow {
-  id: string
-  discussion_id: string
-  panelist_id: string
-  content: string
-  type: MessageType
-  seq: number
-  created_at: string
-}
-
-export interface ConsensusRow {
-  id: string
-  discussion_id: string
-  content: string
-  confidence: number
-  updated_at: string
-}
-
-export interface DivergenceRow {
-  id: string
-  discussion_id: string
-  content: string
-  perspectives: string // SQLite stores JSON string
-  updated_at: string
-}
-
-// ===== LLM Client =====
+// ===== Server-specific types =====
 
 export interface LLMClient {
   chat(messages: { role: string; content: string }[]): Promise<string>
   streamChat(messages: { role: string; content: string }[]): AsyncGenerator<string>
 }
-
-// ===== Business Input/Output Types =====
 
 export interface GeneratePanelistsInput {
   topic: string

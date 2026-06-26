@@ -22,5 +22,9 @@ build/
 # 临时文件
 tmp/
 
+# 测试输出
+client/test-results/
 
+# npm lock (项目使用 pnpm)
+server/package-lock.json
 

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { getDb, queryAll, queryOne, execute } from '../db/index.js'
+import type { SqlJsDb } from '../db/index.js'
 import { createLLMClient } from '../services/llm.js'
 import { generatePanelists } from '../services/panelist.js'
 import { decideNextSpeaker, generateSpeechStream, generateSpeechContent, generateDiscussionSummary, getHostPanelistId, MAX_ROUNDS } from '../services/discussion.js'
@@ -24,6 +25,15 @@ function enrichMessages(
     title: map[m.panelist_id]?.title ?? '',
     color: map[m.panelist_id]?.color ?? '#888888',
   }))
+}
+
+/** 从嘉宾列表构建 id → name 映射 */
+function buildNameMap(panelists: { id: string; name: string }[]): Record<string, string> {
+  const map: Record<string, string> = {}
+  for (const p of panelists) {
+    map[p.id] = p.name
+  }
+  return map
 }
 
 // GET /api/discussions — 获取讨论列表
@@ -171,6 +181,75 @@ router.patch('/:id/pin', async (req: Request, res: Response) => {
   }
 })
 
+/**
+ * 执行讨论启动的第一步：决定发言人并生成首次发言。
+ * /confirm 和 /start 共享此逻辑。
+ */
+async function executeFirstStep(
+  db: SqlJsDb,
+  discussionId: string,
+  topic: string,
+  llm: ReturnType<typeof createLLMClient>,
+  endpointLabel: string,
+): Promise<{
+  updatedDiscussion: DiscussionRow
+  updatedPanelists: PanelistRow[]
+  updatedMessages: ReturnType<typeof enrichMessages>
+}> {
+  execute(db, 'UPDATE discussions SET status = ? WHERE id = ?', ['live', discussionId])
+
+  const panelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [discussionId]) as PanelistRow[]
+  const messages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [discussionId]) as MessageRow[]
+
+  const panelistNameMap = buildNameMap(panelists)
+
+  const decision = await decideNextSpeaker(
+    {
+      topic,
+      panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
+      messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
+    },
+    llm
+  )
+
+  const msgId = uuidv4()
+  const nextSeq = messages.length + 1
+  execute(db,
+    'INSERT INTO messages (id, discussion_id, panelist_id, content, type, seq) VALUES (?, ?, ?, ?, ?, ?)',
+    [msgId, discussionId, decision.panelist_id, '', decision.type, nextSeq]
+  )
+
+  execute(db, 'UPDATE panelists SET status = ? WHERE id = ?', ['speaking', decision.panelist_id])
+  execute(db, 'INSERT INTO panelist_status_logs (id, panelist_id, status, focus) VALUES (?, ?, ?, ?)',
+    [uuidv4(), decision.panelist_id, 'speaking', null]
+  )
+
+  const speechContent = await generateSpeechContent(
+    {
+      topic,
+      panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
+      messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
+    },
+    decision,
+    llm
+  )
+
+  execute(db, 'UPDATE messages SET content = ? WHERE id = ?', [speechContent, msgId])
+
+  const updatedDiscussion = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [discussionId]) as DiscussionRow
+  const updatedPanelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [discussionId]) as PanelistRow[]
+  const updatedMessages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [discussionId]) as MessageRow[]
+
+  const actionText = endpointLabel === 'confirm' ? '确认并开始' : '开始'
+  console.log(`[POST /api/discussions/:id/${endpointLabel}] 讨论${actionText}, id:`, discussionId)
+
+  return {
+    updatedDiscussion,
+    updatedPanelists,
+    updatedMessages: enrichMessages(updatedMessages, updatedPanelists),
+  }
+}
+
 // POST /api/discussions/:id/confirm — 确认并开始讨论（前端调用）
 router.post('/:id/confirm', async (req: Request, res: Response) => {
   try {
@@ -193,57 +272,11 @@ router.post('/:id/confirm', async (req: Request, res: Response) => {
     }
 
     const llm = createLLMClient(apiKey)
-
-    execute(db, 'UPDATE discussions SET status = ? WHERE id = ?', ['live', req.params.id])
-
-    const panelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
-    const messages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [req.params.id]) as MessageRow[]
-
-    const panelistNameMap: Record<string, string> = {}
-    for (const p of panelists) {
-      panelistNameMap[p.id] = p.name
-    }
-
-    const decision = await decideNextSpeaker(
-      {
-        topic: discussion.topic,
-        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
-        messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
-      },
-      llm
+    const { updatedDiscussion, updatedPanelists, updatedMessages } = await executeFirstStep(
+      db, req.params.id as string, discussion.topic, llm, 'confirm'
     )
 
-    const msgId = uuidv4()
-    const nextSeq = messages.length + 1
-    execute(db,
-      'INSERT INTO messages (id, discussion_id, panelist_id, content, type, seq) VALUES (?, ?, ?, ?, ?, ?)',
-      [msgId, req.params.id, decision.panelist_id, '', decision.type, nextSeq]
-    )
-
-    execute(db, 'UPDATE panelists SET status = ? WHERE id = ?', ['speaking', decision.panelist_id])
-    execute(db, 'INSERT INTO panelist_status_logs (id, panelist_id, status, focus) VALUES (?, ?, ?, ?)',
-      [uuidv4(), decision.panelist_id, 'speaking', null]
-    )
-
-    // Generate speech content (non-streaming for REST)
-    const speechContent = await generateSpeechContent(
-      {
-        topic: discussion.topic,
-        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
-        messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
-      },
-      decision,
-      llm
-    )
-
-    execute(db, 'UPDATE messages SET content = ? WHERE id = ?', [speechContent, msgId])
-
-    const updatedDiscussion = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [req.params.id]) as DiscussionRow
-    const updatedPanelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
-    const updatedMessages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [req.params.id]) as MessageRow[]
-
-    console.log('[POST /api/discussions/:id/confirm] 讨论确认并开始, id:', req.params.id)
-    res.json({ ...updatedDiscussion, panelists: updatedPanelists, messages: enrichMessages(updatedMessages, updatedPanelists), consensus: [], divergence: [] })
+    res.json({ ...updatedDiscussion, panelists: updatedPanelists, messages: updatedMessages, consensus: [], divergence: [] })
   } catch (e: any) {
     console.error('[POST /api/discussions/:id/confirm] 错误:', e)
     const status = e.statusCode || 500
@@ -273,57 +306,11 @@ router.post('/:id/start', async (req: Request, res: Response) => {
     }
 
     const llm = createLLMClient(apiKey)
-
-    execute(db, 'UPDATE discussions SET status = ? WHERE id = ?', ['live', req.params.id])
-
-    const panelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
-    const messages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [req.params.id]) as MessageRow[]
-
-    const panelistNameMap: Record<string, string> = {}
-    for (const p of panelists) {
-      panelistNameMap[p.id] = p.name
-    }
-
-    const decision = await decideNextSpeaker(
-      {
-        topic: discussion.topic,
-        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
-        messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
-      },
-      llm
+    const { updatedDiscussion, updatedPanelists, updatedMessages } = await executeFirstStep(
+      db, req.params.id as string, discussion.topic, llm, 'start'
     )
 
-    const msgId = uuidv4()
-    const nextSeq = messages.length + 1
-    execute(db,
-      'INSERT INTO messages (id, discussion_id, panelist_id, content, type, seq) VALUES (?, ?, ?, ?, ?, ?)',
-      [msgId, req.params.id, decision.panelist_id, '', decision.type, nextSeq]
-    )
-
-    execute(db, 'UPDATE panelists SET status = ? WHERE id = ?', ['speaking', decision.panelist_id])
-    execute(db, 'INSERT INTO panelist_status_logs (id, panelist_id, status, focus) VALUES (?, ?, ?, ?)',
-      [uuidv4(), decision.panelist_id, 'speaking', null]
-    )
-
-    // Generate speech content (non-streaming for REST)
-    const speechContent = await generateSpeechContent(
-      {
-        topic: discussion.topic,
-        panelists: panelists.map(p => ({ id: p.id, name: p.name, role: p.role, title: p.title, stance: p.stance, status: p.status })),
-        messages: messages.map(m => ({ panelist_id: m.panelist_id, name: panelistNameMap[m.panelist_id] || '', content: m.content, type: m.type })),
-      },
-      decision,
-      llm
-    )
-
-    execute(db, 'UPDATE messages SET content = ? WHERE id = ?', [speechContent, msgId])
-
-    const updatedDiscussion = queryOne(db, 'SELECT * FROM discussions WHERE id = ?', [req.params.id]) as DiscussionRow
-    const updatedPanelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
-    const updatedMessages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [req.params.id]) as MessageRow[]
-
-    console.log('[POST /api/discussions/:id/start] 讨论开始, id:', req.params.id)
-    res.json({ ...updatedDiscussion, panelists: updatedPanelists, messages: enrichMessages(updatedMessages, updatedPanelists), consensus: [], divergence: [] })
+    res.json({ ...updatedDiscussion, panelists: updatedPanelists, messages: updatedMessages, consensus: [], divergence: [] })
   } catch (e: any) {
     console.error('[POST /api/discussions/:id/start] 错误:', e)
     const status = e.statusCode || 500
@@ -357,10 +344,7 @@ router.post('/:id/next-step', async (req: Request, res: Response) => {
     const panelists = queryAll(db, 'SELECT * FROM panelists WHERE discussion_id = ?', [req.params.id]) as PanelistRow[]
     const messages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [req.params.id]) as MessageRow[]
 
-    const panelistNameMap: Record<string, string> = {}
-    for (const p of panelists) {
-      panelistNameMap[p.id] = p.name
-    }
+    const panelistNameMap = buildNameMap(panelists)
 
     const ctx = {
       topic: discussion.topic,
@@ -439,7 +423,9 @@ router.post('/:id/next-step', async (req: Request, res: Response) => {
     if (nextSeq >= 4) {
       const existingConsensus = queryAll(db, 'SELECT * FROM consensus_points WHERE discussion_id = ?', [req.params.id]) as ConsensusRow[]
       const existingDivergence = queryAll(db, 'SELECT * FROM divergence_points WHERE discussion_id = ?', [req.params.id]) as DivergenceRow[]
-      const recentMsgs = messages.slice(-5).map(m => ({
+      // Re-query latest messages 以包含刚生成的发言
+      const latestMessages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [req.params.id]) as MessageRow[]
+      const recentMsgs = latestMessages.slice(-5).map(m => ({
         panelist_id: m.panelist_id,
         name: panelistNameMap[m.panelist_id] || '',
         content: m.content,
@@ -577,10 +563,7 @@ router.get('/:id/stream', async (req: Request, res: Response) => {
       const currentMessages = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [req.params.id]) as MessageRow[]
 
       // 构建 name map 用于 context
-      const nameMap: Record<string, string> = {}
-      for (const p of currentPanelists) {
-        nameMap[p.id] = p.name
-      }
+      const nameMap = buildNameMap(currentPanelists)
 
       const totalMsgs = currentMessages.length + 1
       const ctx = {
@@ -739,7 +722,9 @@ router.get('/:id/stream', async (req: Request, res: Response) => {
       if (msgsAfterThis >= 4 && msgsAfterThis % 3 === 1) {
         const existingConsensus = queryAll(db, 'SELECT * FROM consensus_points WHERE discussion_id = ?', [req.params.id]) as ConsensusRow[]
         const existingDivergence = queryAll(db, 'SELECT * FROM divergence_points WHERE discussion_id = ?', [req.params.id]) as DivergenceRow[]
-        const recentMsgs = currentMessages.slice(-5).map(m => ({
+        // Re-query latest messages 以包含刚流式生成的发言
+        const latestMsgs = queryAll(db, 'SELECT * FROM messages WHERE discussion_id = ? ORDER BY seq', [req.params.id]) as MessageRow[]
+        const recentMsgs = latestMsgs.slice(-5).map(m => ({
           panelist_id: m.panelist_id,
           name: nameMap[m.panelist_id] || '',
           content: m.content,

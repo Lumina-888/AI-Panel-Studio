@@ -10,8 +10,10 @@
 2. [【SDD 阶段】API 契约定义](#2-sdd-阶段api-契约定义)
 3. [【DDD 阶段】前端架构设计与组件规划](#3-ddd-阶段前端架构设计与组件规划)
 4. [【DDD 阶段】前端工程搭建与组件实现](#4-ddd-阶段前端工程搭建与组件实现)
-5. [【TDD 阶段】—— 待记录](#5-tdd-阶段)
-6. [【E2E 阶段】—— 待记录](#6-e2e-阶段)
+5. [【TDD 阶段】后端 TDD 工程搭建 + 核心服务实现](#51-后端-tdd-工程搭建--核心服务实现)
+6. [【TDD 阶段】讨论删除/置顶 + 流式输出](#52-讨论删除置顶--流式输出)
+7. [【TDD 阶段】全站视觉重设计](#53-全站视觉重设计)
+8. [【E2E 阶段】Playwright E2E 测试框架搭建](#61-playwright-e2e-测试框架搭建)
 
 ---
 
@@ -183,10 +185,142 @@
 
 ## 5. 【TDD 阶段】
 
-> *待记录* — 进入 TDD 阶段后填写
+### 5.1 后端 TDD 工程搭建 + 核心服务实现
+
+#### Prompt
+
+```
+你现在扮演一名资深后端工程师，以 TDD 方式搭建 server/ 后端工程。
+
+技术栈：Node.js 24 / TypeScript 5.8 / Vitest 4 / Zod 3 / OpenAI SDK 4 / Express 5
+
+核心模块（三个）：
+1. 嘉宾生成 (services/panelist.ts) — 根据话题+人数调用 LLM 生成 1 host + N expert
+2. 发言调度 (services/discussion.ts) — 根据讨论上下文决定下一个发言人和类型
+3. 共识提炼 (services/consensus.ts) — 从发言中提取共识点(含置信度)和分歧点
+
+TDD 铁律：先写失败测试 → 验证 RED → 最小实现 → 验证 GREEN → 提交。
+
+架构约束：
+- LLMClient 接口通过依赖注入，测试使用 MockLLMClient
+- 纯逻辑测试不调真实 API，集成测试调真实 DeepSeek API
+- 三个 service 不直接操作数据库
+- 集成测试只验结构不验内容
+
+输出：
+1. server/ 工程脚手架（package.json + tsconfig + vitest.config）
+2. 基础类型定义（types/index.ts）含 LLMClient 接口
+3. 错误工具（utils/errors.ts）
+4. 数据库初始化薄封装（db/index.ts）
+5. LLM 适配器（services/llm.ts）
+6. 三个核心 service 的测试文件 × 3 + 实现文件 × 3
+7. 集成测试（调真实 API，无 Key 时自动 skip）
+```
+
+#### 意图
+以严格 TDD 流程确保三项核心逻辑（嘉宾生成、发言调度、共识提炼）的正确性，通过 MockLLMClient 依赖注入实现纯逻辑与集成测试分离。
+
+#### 挑战与修正
+- **挑战**：panelist 生成测试用例覆盖了解析容错（markdown 包裹 JSON、非法 JSON、缺失字段、非法 role/color、颜色重复、host 数量校验），共 14 个测试用例，实现时需精确匹配 Zod schema + 业务校验逻辑 + 1 次重试策略
+- **修正**：Zod schema 的 discriminator 写法在复杂对象中不适用，改为手动校验 host 数量 + 颜色唯一性；extractJson 函数通过正则提取 JSON 块，兼容 LLM 常见的 markdown 代码块包裹行为
+- **挑战**：consensus 提炼因实时场景对延迟敏感，决定只对 panelist 实施 1 次重试，discussion 和 consensus 不重试
+- **修正**：consensus 解析失败采用降级处理（返回空数组），不打断讨论流程
+
+---
+
+### 5.2 讨论删除/置顶 + 流式输出
+
+#### Prompt
+
+```
+基于已完成的三项核心 service，实现以下后端功能：
+
+1. 数据库新增 pinned_at 列，支持讨论置顶（允许多条，按 pinned_at 倒序）
+2. 新增 DELETE /api/discussions/:id 和 PATCH /api/discussions/:id/pin 端点
+3. 发言拆分为两步（调度决策 + 流式内容生成）：
+   - decideNextSpeaker 只返回 { panelist_id, type }，不再包含 content
+   - 新增 generateSpeechStream (AsyncGenerator) 和 generateSpeechContent
+4. SSE 新增 message_token 事件类型，逐 token 推送发言内容
+5. 前端 discussionStore 新增 appendMessageToken 处理流式追加
+6. 前端 DiscussionList 新增置顶/删除按钮和确认弹窗
+```
+
+#### 意图
+在核心逻辑完成后，将讨论管理（删除/置顶）和流式输出体验补全，为 E2E 测试提供完整的用户流程。
+
+#### 挑战与修正
+- **挑战**：拆分 decideNextSpeaker 后需修改 4 处调用（confirm / start / next-step / SSE stream），保持调度 prompt 与内容生成 prompt 独立且上下文传递正确
+- **修正**：generateSpeechStream 通过独立的 speech system prompt（第一人称、口语化、1-2 句）和包含发言人 name/title/stance 的 user prompt 生成发言，与调度 prompt 完全解耦
+- **挑战**：SSE 流式推送中 token 乱序问题——message_token 可能在 transcript_message 之前到达
+- **修正**：前端 appendMessageToken 先通过 seq 查找占位消息追加 token，addMessage 在收到完整 transcript_message 后替换同级占位行
+
+---
+
+### 5.3 全站视觉重设计
+
+#### Prompt
+
+```
+基于现有代码库，按照全站视觉重设计规范完成以下工作。
+
+双主题设计：
+- 主页 (/)：极简黑白调，StarfieldBackground mono 主题
+- 演播厅 (/discussions, /discussion/:id)：深蓝科技感，黑蓝玻璃面板
+
+新建/重组：
+1. 路由架构：/ → HomePage, /discussions → StudioLayout, /discussion/:id → DiscussionRoom
+2. 新组件：PulseDot 三态脉冲圆点, HomeDiscussionPreview, StudioDiscussionList
+3. 增强组件：StarButton 渐变滑动, SlideButton 渐变, BarLoader 音波条, CyberCard/ExpandCard
+4. 重设计：TranscriptView 横线分隔去卡片, ConsensusDivergencePanel 拖拽调整高度, PanelistSidebar
+5. 三级弹窗统一框架：glass-panel + SlideButton + OrbitLoader
+
+硬性约束：
+- 所有功能、API、状态管理逻辑不变
+- 纯 JSX/CSS 重构，Tailwind v4 内联
+- 所有 UI 文本使用中文
+```
+
+#### 意图
+在保持所有后端逻辑和状态管理不变的前提下，通过纯 UI 重构提升设计品质，实现"演播厅"视觉体验。
+
+#### 挑战与修正
+- **挑战**：中间发现组件过度碎片化，部分组件只有一两行 JSX，过度抽象
+- **修正**：合并了一些薄组件，保持组件数量合理，遵循"够用"原则
+- **挑战**：Tailwind v4 的 @theme 变量在组件中无法直接引用，需要内联或者通过 CSS 变量桥接
+- **修正**：在 style.css 中通过 @layer base 定义 CSS 变量，组件中通过 Tailwind 类名引用
 
 ---
 
 ## 6. 【E2E 阶段】
 
-> *待记录* — 进入 E2E 阶段后填写
+### 6.1 Playwright E2E 测试框架搭建
+
+#### Prompt
+
+```
+为 client/ 搭建 Playwright E2E 测试框架。
+
+要求：
+1. Mock API 服务器：在 e2e/mock-server/ 创建 Express 服务，监听 3001 端口
+   - 覆盖所有 REST 端点（CRUD discussions + start + next-step + confirm）
+   - 模拟 SSE 事件流推送
+   - 使用与真实 API 一致的响应结构
+2. 测试数据工厂：e2e/fixtures/mock-data.ts 提供预设讨论、嘉宾、消息数据
+3. 测试用例覆盖：
+   - homepage.spec.ts：主页渲染、讨论列表预览、发起新讨论 CTA
+   - create-discussion.spec.ts：创建弹窗 → 输入话题 → 生成嘉宾 → 确认流程
+   - discussion-list.spec.ts：演播厅列表、置顶/删除操作
+   - discussion-room.spec.ts：讨论室渲染、Transcript 消息展示、共识/分歧面板
+   - responsive.spec.ts：桌面端/平板/手机三档响应式布局验证
+4. Playwright 配置：chromium-desktop，CI 模式下 retry: 2
+5. Vitest 配置排除 e2e/ 目录，避免 Playwright spec 被 Vitest 误捕获
+```
+
+#### 意图
+建立完整的 E2E 测试基础设施，通过 Mock API 服务器隔离后端依赖，确保前端交互流程在无真实 LLM API 的情况下也能完整验证。
+
+#### 挑战与修正
+- **挑战**：Playwright 和 Vitest 都匹配 `*.spec.ts` 文件，导致 Vitest 运行时误捕获 Playwright 测试文件报 5 个 FAIL
+- **修正**：在 vitest.config.ts 中添加 `include: ['src/**/*.test.{ts,tsx}']` 和 `exclude: ['e2e/**']`，明确区分 Vitest（单元/组件测试）和 Playwright（E2E）的测试文件范围
+- **挑战**：Mock SSE 服务器需要在测试期间持续推送事件，但又不能无限运行
+- **修正**：Mock 服务器通过预设的事件序列（eventQueue）模拟 SSE 流，每个讨论独立队列，讨论结束后自动停止推送
