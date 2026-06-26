@@ -13,9 +13,47 @@
   --color-status-green: #00e676;
   --color-status-amber: #ffab00;
   --color-status-gray: #555555;
+  --color-home-bg: #0a0a0a;
+  --color-home-text: #f5f5f5;
+  --color-home-dim: rgba(255, 255, 255, 0.45);
+  --color-home-panel: rgba(255, 255, 255, 0.03);
+  --color-home-border: rgba(255, 255, 255, 0.06);
 
   --font-sans: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* ===== 主页（黑白调）主题变量 ===== */
+
+:root {
+  --color-home-bg: #0a0a0a;
+  --color-home-text: #f5f5f5;
+  --color-home-dim: rgba(255, 255, 255, 0.45);
+  --color-home-panel: rgba(255, 255, 255, 0.03);
+  --color-home-border: rgba(255, 255, 255, 0.06);
+}
+
+/* ===== 呼吸辉光动画（主页预览面板） ===== */
+
+@keyframes breatheGlow {
+  0%, 100% { box-shadow: 0 0 12px rgba(255, 255, 255, 0.03), 0 0 24px rgba(255, 255, 255, 0.015); }
+  50%      { box-shadow: 0 0 18px rgba(255, 255, 255, 0.06), 0 0 36px rgba(255, 255, 255, 0.03); }
+}
+
+.animate-breathe-glow {
+  animation: breatheGlow 3s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-breathe-glow {
+    animation: none;
+  }
+}
+
+.home-panel {
+  background: var(--color-home-panel);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--color-home-border);
 }
 
 /* ===== 全局基础 ===== */
